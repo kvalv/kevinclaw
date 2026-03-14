@@ -16,9 +16,15 @@ import (
 )
 
 type recording struct {
+	Test   string   `json:"test"`
+	Turn   int      `json:"turn"`
 	Hash   string   `json:"hash"`
 	Prompt string   `json:"prompt"`
 	Lines  []string `json:"lines"`
+}
+
+func recordingKey(test string, turn int, hash string) string {
+	return fmt.Sprintf("%s:%d:%s", test, turn, hash)
 }
 
 var (
@@ -63,7 +69,7 @@ func ensureLoaded(t *testing.T) {
 		if err := json.Unmarshal(sc.Bytes(), &rec); err != nil {
 			continue
 		}
-		cache[rec.Hash] = &rec
+		cache[recordingKey(rec.Test, rec.Turn, rec.Hash)] = &rec
 	}
 }
 
@@ -84,41 +90,46 @@ func saveRecording(t *testing.T, rec *recording) {
 	b, _ := json.Marshal(rec)
 	f.Write(b)
 	f.Write([]byte("\n"))
-	cache[rec.Hash] = rec
+	cache[recordingKey(rec.Test, rec.Turn, rec.Hash)] = rec
 }
 
-// QueryClaude returns stream-json output lines for a prompt.
-// Uses cached recording if available. If not and AGENT_INTEGRATION=1,
-// calls the real CLI and records the result for future runs.
-func QueryClaude(t *testing.T, prompt string) []string {
+func queryClaude(t *testing.T, turn int, prompt, sessionID string) []string {
 	t.Helper()
 	ensureLoaded(t)
 
 	hash := promptHash(prompt)
+	key := recordingKey(t.Name(), turn, hash)
 
 	mu.Lock()
-	rec, ok := cache[hash]
+	rec, ok := cache[key]
 	mu.Unlock()
 
 	if ok {
-		t.Logf("vcr: replaying %s", hash)
+		t.Logf("vcr: replaying %s", key)
 		return rec.Lines
 	}
 
 	if os.Getenv("AGENT_INTEGRATION") == "" {
-		t.Skipf("vcr: no recording for %s and AGENT_INTEGRATION not set", hash)
+		t.Skipf("vcr: no recording for %s and AGENT_INTEGRATION not set", key)
 	}
 
-	t.Logf("vcr: recording response for: %s", prompt)
-	cmd := exec.Command("claude",
+	t.Logf("vcr: recording %s", key)
+	args := []string{
 		"-p",
 		"--output-format", "stream-json",
 		"--verbose",
-		"--no-session-persistence",
-		prompt,
-	)
+	}
+	if sessionID != "" {
+		args = append(args, "--resume", sessionID)
+	}
+	args = append(args, prompt)
+
+	cmd := exec.Command("claude", args...)
 	out, err := cmd.Output()
 	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			t.Fatalf("claude CLI exited %d: %s", exitErr.ExitCode(), string(exitErr.Stderr))
+		}
 		t.Fatalf("claude CLI: %v", err)
 	}
 
@@ -129,17 +140,20 @@ func QueryClaude(t *testing.T, prompt string) []string {
 		}
 	}
 
-	r := &recording{Hash: hash, Prompt: prompt, Lines: lines}
+	r := &recording{Test: t.Name(), Turn: turn, Hash: hash, Prompt: prompt, Lines: lines}
 	saveRecording(t, r)
 	return lines
 }
 
 // ClaudeVCR returns an agent.Runner backed by recorded Claude CLI responses.
-// On first run (with AGENT_INTEGRATION=1), it calls the real CLI and saves the
-// response to testdata/recordings.jsonl keyed by prompt hash. On subsequent runs,
-// it replays the cached response without hitting the CLI.
-func ClaudeVCR(t *testing.T) func(ctx context.Context, prompt string) ([]string, error) {
-	return func(_ context.Context, prompt string) ([]string, error) {
-		return QueryClaude(t, prompt), nil
+// Each call is keyed by (test name, turn index, prompt hash). On first run
+// (with AGENT_INTEGRATION=1), it calls the real CLI (with --resume for
+// multi-turn) and saves responses. On subsequent runs, it replays from cache.
+func ClaudeVCR(t *testing.T) func(ctx context.Context, prompt string, sessionID string) ([]string, error) {
+	turn := 0
+	return func(_ context.Context, prompt string, sessionID string) ([]string, error) {
+		lines := queryClaude(t, turn, prompt, sessionID)
+		turn++
+		return lines, nil
 	}
 }

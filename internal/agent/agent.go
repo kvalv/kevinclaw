@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -11,20 +12,30 @@ import (
 type SessionKey string
 
 type Config struct {
-	IdleTimeout time.Duration
-	WorkDir     string
+	IdleTimeout    time.Duration
+	WorkDir        string
+	SystemPrompt   string
+	MCPConfigPath  string
+	AllowedPaths   []string
+	PermissionMode string // e.g. "bypassPermissions"
 }
 
 // Runner executes a claude query and returns stream-json output lines.
-type Runner func(ctx context.Context, prompt string) ([]string, error)
+// sessionID is empty for new conversations, or a previous session ID to resume.
+type Runner func(ctx context.Context, prompt string, sessionID string) ([]string, error)
 
 type Agent struct {
-	cfg    Config
-	runner Runner
+	cfg      Config
+	runner   Runner
+	mu       sync.Mutex
+	sessions map[SessionKey]string // key -> claude session ID
 }
 
 func New(cfg Config) *Agent {
-	return &Agent{cfg: cfg}
+	return &Agent{
+		cfg:      cfg,
+		sessions: make(map[SessionKey]string),
+	}
 }
 
 func (a *Agent) WithRunner(r Runner) *Agent {
@@ -33,32 +44,33 @@ func (a *Agent) WithRunner(r Runner) *Agent {
 }
 
 // HandleMessage sends a prompt to claude and returns the text response.
+// Resumes the session if one exists for this key.
 func (a *Agent) HandleMessage(ctx context.Context, key SessionKey, text string) (string, error) {
-	lines, err := a.runner(ctx, text)
+	a.mu.Lock()
+	sessionID := a.sessions[key]
+	a.mu.Unlock()
+
+	lines, err := a.runner(ctx, text, sessionID)
 	if err != nil {
 		return "", fmt.Errorf("running claude: %w", err)
 	}
-	return parseResponse(lines)
+
+	result, newSessionID, err := parseResponse(lines)
+	if err != nil {
+		return "", err
+	}
+
+	if newSessionID != "" {
+		a.mu.Lock()
+		a.sessions[key] = newSessionID
+		a.mu.Unlock()
+	}
+
+	return result, nil
 }
 
-type streamEvent struct {
-	Type    string          `json:"type"`
-	Subtype string          `json:"subtype,omitempty"`
-	Message json.RawMessage `json:"message,omitempty"`
-	Result  string          `json:"result,omitempty"`
-}
-
-type assistantMessage struct {
-	Content []contentBlock `json:"content"`
-}
-
-type contentBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
-}
-
-// parseResponse extracts the final text from stream-json lines.
-func parseResponse(lines []string) (string, error) {
+// parseResponse extracts the result text and session ID from stream-json lines.
+func parseResponse(lines []string) (result string, sessionID string, err error) {
 	for _, line := range lines {
 		var ev streamEvent
 		if err := json.Unmarshal([]byte(line), &ev); err != nil {
@@ -66,10 +78,10 @@ func parseResponse(lines []string) (string, error) {
 		}
 		if ev.Type == "result" {
 			if ev.Subtype == "error" {
-				return "", fmt.Errorf("claude error: %s", ev.Result)
+				return "", "", fmt.Errorf("claude error: %s", ev.Result)
 			}
-			return ev.Result, nil
+			return ev.Result, ev.SessionID, nil
 		}
 	}
-	return "", fmt.Errorf("no result event in response")
+	return "", "", fmt.Errorf("no result event in response")
 }
