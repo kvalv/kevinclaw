@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -34,6 +35,7 @@ type Agent struct {
 func New(cfg Config) *Agent {
 	return &Agent{
 		cfg:      cfg,
+		runner:   ClaudeRunner(cfg),
 		sessions: make(map[SessionKey]string),
 	}
 }
@@ -50,13 +52,25 @@ func (a *Agent) HandleMessage(ctx context.Context, key SessionKey, text string) 
 	sessionID := a.sessions[key]
 	a.mu.Unlock()
 
+	resuming := sessionID != ""
+	slog.Info("agent: handling message",
+		"session_key", key,
+		"session_id", sessionID,
+		"resuming", resuming,
+		"prompt_len", len(text),
+	)
+
+	start := time.Now()
 	lines, err := a.runner(ctx, text, sessionID)
+	elapsed := time.Since(start)
 	if err != nil {
+		slog.Error("agent: runner failed", "session_key", key, "elapsed", elapsed, "err", err)
 		return "", fmt.Errorf("running claude: %w", err)
 	}
 
 	result, newSessionID, err := parseResponse(lines)
 	if err != nil {
+		slog.Error("agent: parse failed", "session_key", key, "err", err)
 		return "", err
 	}
 
@@ -65,6 +79,13 @@ func (a *Agent) HandleMessage(ctx context.Context, key SessionKey, text string) 
 		a.sessions[key] = newSessionID
 		a.mu.Unlock()
 	}
+
+	slog.Info("agent: response ready",
+		"session_key", key,
+		"session_id", newSessionID,
+		"elapsed", elapsed,
+		"result_len", len(result),
+	)
 
 	return result, nil
 }

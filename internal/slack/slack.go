@@ -43,6 +43,7 @@ func (c *Client) Listen(ctx context.Context, handler func(Event)) error {
 			case socketmode.EventTypeEventsAPI:
 				ev, ok := evt.Data.(slackevents.EventsAPIEvent)
 				if !ok {
+					slog.Warn("slack: unexpected EventsAPI data type")
 					continue
 				}
 				sm.Ack(*evt.Request)
@@ -50,8 +51,15 @@ func (c *Client) Listen(ctx context.Context, handler func(Event)) error {
 				switch inner := ev.InnerEvent.Data.(type) {
 				case *slackevents.MessageEvent:
 					if inner.BotID != "" {
+						slog.Debug("slack: ignoring bot message", "bot_id", inner.BotID, "channel", inner.Channel)
 						continue
 					}
+					slog.Info("slack: message received",
+						"channel", inner.Channel,
+						"user", inner.User,
+						"thread_ts", inner.ThreadTimeStamp,
+						"text_len", len(inner.Text),
+					)
 					handler(Event{
 						Channel:  inner.Channel,
 						ThreadTS: inner.ThreadTimeStamp,
@@ -59,12 +67,20 @@ func (c *Client) Listen(ctx context.Context, handler func(Event)) error {
 						UserID:   inner.User,
 					})
 				case *slackevents.AppMentionEvent:
+					slog.Info("slack: app mention",
+						"channel", inner.Channel,
+						"user", inner.User,
+						"thread_ts", inner.ThreadTimeStamp,
+						"text_len", len(inner.Text),
+					)
 					handler(Event{
 						Channel:  inner.Channel,
 						ThreadTS: inner.ThreadTimeStamp,
 						Text:     inner.Text,
 						UserID:   inner.User,
 					})
+				default:
+					slog.Debug("slack: unhandled inner event", "type", ev.InnerEvent.Type)
 				}
 
 			case socketmode.EventTypeConnecting:
@@ -72,9 +88,9 @@ func (c *Client) Listen(ctx context.Context, handler func(Event)) error {
 			case socketmode.EventTypeConnected:
 				slog.Info("slack: connected")
 			case socketmode.EventTypeHello:
-				slog.Info("slack: hello received")
+				slog.Info("slack: ready")
 			default:
-				slog.Debug("slack: unhandled event", "type", evt.Type)
+				slog.Debug("slack: unhandled socket event", "type", evt.Type)
 				if evt.Request != nil {
 					sm.Ack(*evt.Request)
 				}
@@ -95,7 +111,9 @@ func (c *Client) SendMessage(ctx context.Context, channel, text, threadTS string
 	}
 	_, ts, err := c.api.PostMessageContext(ctx, channel, opts...)
 	if err != nil {
+		slog.Error("slack: send failed", "channel", channel, "thread_ts", threadTS, "err", err)
 		return "", fmt.Errorf("posting message: %w", err)
 	}
+	slog.Info("slack: message sent", "channel", channel, "thread_ts", threadTS, "ts", ts, "text_len", len(text))
 	return ts, nil
 }

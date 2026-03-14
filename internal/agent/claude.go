@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os/exec"
 	"strings"
 )
@@ -68,6 +69,8 @@ func ClaudeRunner(cfg Config) Runner {
 
 		args = append(args, prompt)
 
+		slog.Debug("claude: spawning", "args_count", len(args), "session_id", sessionID, "workdir", cfg.WorkDir)
+
 		cmd := exec.CommandContext(ctx, "claude", args...)
 		if cfg.WorkDir != "" {
 			cmd.Dir = cfg.WorkDir
@@ -76,6 +79,7 @@ func ClaudeRunner(cfg Config) Runner {
 		out, err := cmd.Output()
 		if err != nil {
 			if exitErr, ok := err.(*exec.ExitError); ok {
+				slog.Error("claude: exited with error", "code", exitErr.ExitCode(), "stderr", string(exitErr.Stderr))
 				return nil, fmt.Errorf("claude exited %d: %s", exitErr.ExitCode(), string(exitErr.Stderr))
 			}
 			return nil, err
@@ -87,6 +91,7 @@ func ClaudeRunner(cfg Config) Runner {
 				lines = append(lines, line)
 			}
 		}
+		slog.Debug("claude: finished", "output_lines", len(lines))
 		return lines, nil
 	}
 }
