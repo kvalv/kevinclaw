@@ -25,18 +25,42 @@ type Config struct {
 // sessionID is empty for new conversations, or a previous session ID to resume.
 type Runner func(ctx context.Context, prompt string, sessionID string) ([]string, error)
 
+// SessionStore persists session IDs across restarts.
+type SessionStore interface {
+	GetSession(ctx context.Context, key string) (string, error)
+	SaveSession(ctx context.Context, key, claudeSession string) error
+}
+
+// memoryStore is the default in-memory session store.
+type memoryStore struct {
+	mu       sync.Mutex
+	sessions map[string]string
+}
+
+func (m *memoryStore) GetSession(_ context.Context, key string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.sessions[key], nil
+}
+
+func (m *memoryStore) SaveSession(_ context.Context, key, claudeSession string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sessions[key] = claudeSession
+	return nil
+}
+
 type Agent struct {
 	cfg      Config
 	runner   Runner
-	mu       sync.Mutex
-	sessions map[SessionKey]string // key -> claude session ID
+	sessions SessionStore
 }
 
 func New(cfg Config) *Agent {
 	return &Agent{
 		cfg:      cfg,
 		runner:   ClaudeRunner(cfg),
-		sessions: make(map[SessionKey]string),
+		sessions: &memoryStore{sessions: make(map[string]string)},
 	}
 }
 
@@ -45,12 +69,15 @@ func (a *Agent) WithRunner(r Runner) *Agent {
 	return a
 }
 
+func (a *Agent) WithSessionStore(s SessionStore) *Agent {
+	a.sessions = s
+	return a
+}
+
 // HandleMessage sends a prompt to claude and returns the text response.
 // Resumes the session if one exists for this key.
 func (a *Agent) HandleMessage(ctx context.Context, key SessionKey, text string) (string, error) {
-	a.mu.Lock()
-	sessionID := a.sessions[key]
-	a.mu.Unlock()
+	sessionID, _ := a.sessions.GetSession(ctx, string(key))
 
 	resuming := sessionID != ""
 	slog.Info("agent: handling message",
@@ -75,9 +102,9 @@ func (a *Agent) HandleMessage(ctx context.Context, key SessionKey, text string) 
 	}
 
 	if newSessionID != "" {
-		a.mu.Lock()
-		a.sessions[key] = newSessionID
-		a.mu.Unlock()
+		if err := a.sessions.SaveSession(ctx, string(key), newSessionID); err != nil {
+			slog.Error("agent: save session failed", "session_key", key, "err", err)
+		}
 	}
 
 	slog.Info("agent: response ready",

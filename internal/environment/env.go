@@ -13,6 +13,7 @@ type Environment struct {
 	SLACK_BOT_TOKEN string
 	SLACK_APP_TOKEN string
 	OWNER_USER_ID   string
+	DATABASE_URL    string
 }
 
 func New() (Environment, error) {
@@ -31,6 +32,9 @@ func New() (Environment, error) {
 		return env, err
 	}
 	if env.OWNER_USER_ID, err = parseStr("OWNER_USER_ID"); err != nil {
+		return env, err
+	}
+	if env.DATABASE_URL, err = parseStr("DATABASE_URL"); err != nil {
 		return env, err
 	}
 

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	_ "embed"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -10,44 +11,79 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/kvalv/kevinclaw/internal/agent"
+	"github.com/kvalv/kevinclaw/internal/cron"
 	"github.com/kvalv/kevinclaw/internal/environment"
+	"github.com/kvalv/kevinclaw/internal/postgres"
 	"github.com/kvalv/kevinclaw/internal/slack"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivermigrate"
 )
 
 //go:embed KEVIN.md
 var kevinPrompt string
 
-func projectRoot() string {
-	_, thisFile, _, _ := runtime.Caller(0)
-	return filepath.Dir(thisFile)
-}
+//go:embed migrations/2026-03-15-init.sql
+var migrationSQL string
 
 func main() {
 	setupLogger()
 
-	env, err := environment.New()
-	if err != nil {
-		slog.Error("loading environment", "err", err)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	if err := run(ctx); err != nil {
+		slog.Error("fatal", "err", err)
 		os.Exit(1)
 	}
+}
+
+func run(ctx context.Context) error {
+	env, err := environment.New()
+	if err != nil {
+		return fmt.Errorf("loading environment: %w", err)
+	}
+
+	pool, err := setupDB(ctx, env.DATABASE_URL)
+	if err != nil {
+		return fmt.Errorf("database: %w", err)
+	}
+	defer pool.Close()
+
+	d := postgres.New(pool)
 
 	a := agent.New(agent.Config{
 		IdleTimeout:    5 * time.Minute,
 		WorkDir:        projectRoot(),
 		SystemPrompt:   kevinPrompt,
 		PermissionMode: "bypassPermissions",
-	})
+	}).WithSessionStore(d)
 
 	sc := slack.New(env.SLACK_BOT_TOKEN, env.SLACK_APP_TOKEN)
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
+	sched, err := cron.New(ctx, pool, func(ctx context.Context, sessionKey, prompt string) error {
+		reply, err := a.HandleMessage(ctx, agent.SessionKey(sessionKey), prompt)
+		if err != nil {
+			return err
+		}
+		// TODO: resolve sessionKey back to channel + threadTS for sending
+		slog.Info("cron: job completed", "session_key", sessionKey, "reply_len", len(reply))
+		_ = reply
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("cron: %w", err)
+	}
+	defer sched.Stop(ctx)
 
 	slog.Info("kevinclaw starting")
-	err = sc.Listen(ctx, func(ev slack.Event) {
+	return sc.Listen(ctx, func(ev slack.Event) {
 		go func() {
-			// Add :eyes: to acknowledge receipt
+			if err := d.SaveMessage(ctx, ev.Channel, ev.ThreadTS, ev.MessageTS, ev.UserID, ev.Text); err != nil {
+				slog.Error("db: save message failed", "err", err)
+			}
+
 			if err := sc.AddReaction(ctx, ev.Channel, ev.MessageTS, "eyes"); err != nil {
 				slog.Warn("eyes reaction failed", "err", err)
 			}
@@ -55,7 +91,6 @@ func main() {
 			key := agent.SessionKey(ev.Channel + ":" + ev.ThreadTS)
 			reply, err := a.HandleMessage(ctx, key, ev.Text)
 
-			// Remove :eyes: once done (whether success or failure)
 			if rmErr := sc.RemoveReaction(ctx, ev.Channel, ev.MessageTS, "eyes"); rmErr != nil {
 				slog.Warn("remove eyes reaction failed", "err", rmErr)
 			}
@@ -65,7 +100,6 @@ func main() {
 				return
 			}
 
-			// Reply in existing thread, or start a new thread under the original message
 			threadTS := ev.ThreadTS
 			if threadTS == "" {
 				threadTS = ev.MessageTS
@@ -75,8 +109,37 @@ func main() {
 			}
 		}()
 	})
+}
+
+func setupDB(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
+	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
-		slog.Error("slack listen", "err", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("connecting: %w", err)
 	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("pinging: %w", err)
+	}
+	slog.Info("db: connected")
+
+	if _, err := pool.Exec(ctx, migrationSQL); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("app migration: %w", err)
+	}
+	migrator, err := rivermigrate.New(riverpgxv5.New(pool), nil)
+	if err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("river migrator: %w", err)
+	}
+	if _, err := migrator.Migrate(ctx, rivermigrate.DirectionUp, nil); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("river migration: %w", err)
+	}
+	slog.Info("db: migrations applied")
+	return pool, nil
+}
+
+func projectRoot() string {
+	_, thisFile, _, _ := runtime.Caller(0)
+	return filepath.Dir(thisFile)
 }
