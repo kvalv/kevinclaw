@@ -11,17 +11,6 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 )
 
-// PromptJobArgs defines a scheduled job that sends a prompt to the agent.
-type PromptJobArgs struct {
-	Prompt     string `json:"prompt"`
-	SessionKey string `json:"session_key"`
-}
-
-func (PromptJobArgs) Kind() string { return "prompt" }
-
-// PromptHandler is called when a scheduled prompt job fires.
-type PromptHandler func(ctx context.Context, sessionKey, prompt string) error
-
 // Scheduler manages scheduled tasks via River.
 type Scheduler struct {
 	client *river.Client[pgx.Tx]
@@ -65,6 +54,17 @@ func (s *Scheduler) Schedule(ctx context.Context, args PromptJobArgs) error {
 func (s *Scheduler) Stop(ctx context.Context) error {
 	return s.client.Stop(ctx)
 }
+
+// PromptHandler is called when a scheduled prompt job fires.
+type PromptHandler func(ctx context.Context, sessionKey, prompt string) error
+
+// PromptJobArgs defines a scheduled job that sends a prompt to the agent.
+type PromptJobArgs struct {
+	Prompt     string `json:"prompt"`
+	SessionKey string `json:"session_key"`
+}
+
+func (PromptJobArgs) Kind() string { return "prompt" }
 
 // promptWorker handles scheduled prompt jobs.
 type promptWorker struct {

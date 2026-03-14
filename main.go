@@ -17,15 +17,11 @@ import (
 	"github.com/kvalv/kevinclaw/internal/environment"
 	"github.com/kvalv/kevinclaw/internal/postgres"
 	"github.com/kvalv/kevinclaw/internal/slack"
-	"github.com/riverqueue/river/riverdriver/riverpgxv5"
-	"github.com/riverqueue/river/rivermigrate"
+	"github.com/kvalv/kevinclaw/migrations"
 )
 
 //go:embed KEVIN.md
 var kevinPrompt string
-
-//go:embed migrations/2026-03-15-init.sql
-var migrationSQL string
 
 func main() {
 	setupLogger()
@@ -122,18 +118,9 @@ func setupDB(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	}
 	slog.Info("db: connected")
 
-	if _, err := pool.Exec(ctx, migrationSQL); err != nil {
+	if err := migrations.Run(ctx, pool); err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("app migration: %w", err)
-	}
-	migrator, err := rivermigrate.New(riverpgxv5.New(pool), nil)
-	if err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("river migrator: %w", err)
-	}
-	if _, err := migrator.Migrate(ctx, rivermigrate.DirectionUp, nil); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("river migration: %w", err)
+		return nil, err
 	}
 	slog.Info("db: migrations applied")
 	return pool, nil
