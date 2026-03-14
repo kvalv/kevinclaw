@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	goslack "github.com/slack-go/slack"
+
 	"github.com/kvalv/kevinclaw/internal/agent"
 	"github.com/kvalv/kevinclaw/internal/environment"
 	"github.com/kvalv/kevinclaw/internal/slack"
@@ -33,6 +35,47 @@ func TestSendDM(t *testing.T) {
 		t.Fatalf("SendMessage: %v", err)
 	}
 	t.Logf("sent message ts=%s", ts)
+}
+
+type fakeAPI struct {
+	reactions []fakeReaction
+}
+
+type fakeReaction struct {
+	name    string
+	channel string
+	ts      string
+}
+
+func (f *fakeAPI) PostMessageContext(ctx context.Context, channel string, opts ...goslack.MsgOption) (string, string, error) {
+	return "", "1234.5678", nil
+}
+
+func (f *fakeAPI) AddReactionContext(ctx context.Context, name string, item goslack.ItemRef) error {
+	f.reactions = append(f.reactions, fakeReaction{name: name, channel: item.Channel, ts: item.Timestamp})
+	return nil
+}
+
+func (f *fakeAPI) RemoveReactionContext(ctx context.Context, name string, item goslack.ItemRef) error {
+	return nil
+}
+
+func TestAddReaction(t *testing.T) {
+	fake := &fakeAPI{}
+	client := slack.NewWithAPI(fake)
+
+	err := client.AddReaction(t.Context(), "C123", "1234.5678", "eyes")
+	if err != nil {
+		t.Fatalf("AddReaction: %v", err)
+	}
+
+	if len(fake.reactions) != 1 {
+		t.Fatalf("expected 1 reaction, got %d", len(fake.reactions))
+	}
+	r := fake.reactions[0]
+	if r.name != "eyes" || r.channel != "C123" || r.ts != "1234.5678" {
+		t.Errorf("unexpected reaction: %+v", r)
+	}
 }
 
 func TestSlackRoundTrip(t *testing.T) {

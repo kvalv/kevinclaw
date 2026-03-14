@@ -12,30 +12,77 @@ import (
 
 // Event represents an incoming Slack message.
 type Event struct {
-	Channel  string
-	ThreadTS string
-	Text     string
-	UserID   string
+	Channel   string
+	MessageTS string // timestamp of this message
+	ThreadTS  string // parent thread timestamp (empty if top-level)
+	Text      string
+	UserID    string
+}
+
+// SlackAPI is the subset of the slack.Client we use, for testability.
+type SlackAPI interface {
+	PostMessageContext(ctx context.Context, channel string, opts ...slack.MsgOption) (string, string, error)
+	AddReactionContext(ctx context.Context, name string, item slack.ItemRef) error
+	RemoveReactionContext(ctx context.Context, name string, item slack.ItemRef) error
 }
 
 // Client wraps the Slack API for sending and receiving messages.
 type Client struct {
-	api      *slack.Client
+	api      SlackAPI
+	raw      *slack.Client // needed for Socket Mode; nil when using a fake
 	appToken string
 }
 
 // New creates a new Slack client.
 func New(botToken, appToken string) *Client {
+	c := slack.New(botToken, slack.OptionAppLevelToken(appToken))
 	return &Client{
-		api:      slack.New(botToken, slack.OptionAppLevelToken(appToken)),
+		api:      c,
+		raw:      c,
 		appToken: appToken,
 	}
+}
+
+// NewWithAPI creates a Client backed by the given API implementation (for testing).
+func NewWithAPI(api SlackAPI) *Client {
+	return &Client{api: api}
 }
 
 // Listen connects via Socket Mode and calls handler for each incoming message.
 // Blocks until ctx is cancelled.
 func (c *Client) Listen(ctx context.Context, handler func(Event)) error {
-	sm := socketmode.New(c.api)
+	sm := socketmode.New(c.raw)
+
+	seen := make(map[string]bool) // dedup by channel:ts
+
+	dispatch := func(channel, ts, threadTS, text, user, source string) {
+		key := channel + ":" + ts
+		if seen[key] {
+			slog.Debug("slack: dedup skip", "key", key, "source", source)
+			return
+		}
+		seen[key] = true
+		// Keep map bounded — clear after 1000 entries
+		if len(seen) > 1000 {
+			seen = make(map[string]bool)
+		}
+
+		slog.Info("slack: event",
+			"source", source,
+			"channel", channel,
+			"user", user,
+			"ts", ts,
+			"thread_ts", threadTS,
+			"text_len", len(text),
+		)
+		handler(Event{
+			Channel:   channel,
+			MessageTS: ts,
+			ThreadTS:  threadTS,
+			Text:      text,
+			UserID:    user,
+		})
+	}
 
 	go func() {
 		for evt := range sm.Events {
@@ -54,31 +101,9 @@ func (c *Client) Listen(ctx context.Context, handler func(Event)) error {
 						slog.Debug("slack: ignoring bot message", "bot_id", inner.BotID, "channel", inner.Channel)
 						continue
 					}
-					slog.Info("slack: message received",
-						"channel", inner.Channel,
-						"user", inner.User,
-						"thread_ts", inner.ThreadTimeStamp,
-						"text_len", len(inner.Text),
-					)
-					handler(Event{
-						Channel:  inner.Channel,
-						ThreadTS: inner.ThreadTimeStamp,
-						Text:     inner.Text,
-						UserID:   inner.User,
-					})
+					dispatch(inner.Channel, inner.TimeStamp, inner.ThreadTimeStamp, inner.Text, inner.User, "message")
 				case *slackevents.AppMentionEvent:
-					slog.Info("slack: app mention",
-						"channel", inner.Channel,
-						"user", inner.User,
-						"thread_ts", inner.ThreadTimeStamp,
-						"text_len", len(inner.Text),
-					)
-					handler(Event{
-						Channel:  inner.Channel,
-						ThreadTS: inner.ThreadTimeStamp,
-						Text:     inner.Text,
-						UserID:   inner.User,
-					})
+					dispatch(inner.Channel, inner.TimeStamp, inner.ThreadTimeStamp, inner.Text, inner.User, "app_mention")
 				default:
 					slog.Debug("slack: unhandled inner event", "type", ev.InnerEvent.Type)
 				}
@@ -116,4 +141,26 @@ func (c *Client) SendMessage(ctx context.Context, channel, text, threadTS string
 	}
 	slog.Info("slack: message sent", "channel", channel, "thread_ts", threadTS, "ts", ts, "text_len", len(text))
 	return ts, nil
+}
+
+// AddReaction adds an emoji reaction to a message.
+func (c *Client) AddReaction(ctx context.Context, channel, timestamp, emoji string) error {
+	ref := slack.NewRefToMessage(channel, timestamp)
+	if err := c.api.AddReactionContext(ctx, emoji, ref); err != nil {
+		slog.Error("slack: reaction failed", "channel", channel, "ts", timestamp, "emoji", emoji, "err", err)
+		return fmt.Errorf("adding reaction: %w", err)
+	}
+	slog.Debug("slack: reaction added", "channel", channel, "ts", timestamp, "emoji", emoji)
+	return nil
+}
+
+// RemoveReaction removes an emoji reaction from a message.
+func (c *Client) RemoveReaction(ctx context.Context, channel, timestamp, emoji string) error {
+	ref := slack.NewRefToMessage(channel, timestamp)
+	if err := c.api.RemoveReactionContext(ctx, emoji, ref); err != nil {
+		slog.Error("slack: remove reaction failed", "channel", channel, "ts", timestamp, "emoji", emoji, "err", err)
+		return fmt.Errorf("removing reaction: %w", err)
+	}
+	slog.Debug("slack: reaction removed", "channel", channel, "ts", timestamp, "emoji", emoji)
+	return nil
 }
