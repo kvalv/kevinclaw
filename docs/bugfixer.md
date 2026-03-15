@@ -153,6 +153,63 @@ Uses the Linear MCP server (already configured). Kevin needs to:
 - Update issue status (in progress, done)
 - Link PRs to issues
 
+## Tracking: `bugfixes` table + run logs
+
+Each fix attempt is tracked in Postgres (`bugfixes`) and has a companion log file (`memory/runs/{id}.md`).
+
+### Database (`bugfixes`)
+
+The orchestrator uses this to manage outstanding work:
+
+| Column                       | Purpose                                           |
+| ---------------------------- | ------------------------------------------------- |
+| `linear_issue_id`            | e.g. "PLA-11"                                     |
+| `title`                      | Issue title                                       |
+| `status`                     | pending → running → done/failed/stuck             |
+| `worktree_path`              | Which worktree is allocated                       |
+| `branch`                     | Git branch name                                   |
+| `pr_url`                     | Draft PR link once created                        |
+| `pr_merged`                  | Whether PR has been merged                        |
+| `pr_iterations`              | Review rounds (push → feedback → push)            |
+| `pr_last_checked_at`         | Last time we polled PR status                     |
+| `confidence`                 | JSON: clarity, localizability, testability scores |
+| `log_path`                   | Path to run log file                              |
+| `last_human_update_at`       | Last time Kevin sent owner a status message       |
+| `time_budget`                | Max time for this run (default 1 hour)            |
+| `tokens_used`                | Estimated total tokens spent                      |
+| `cost_usd`                   | Estimated cost                                    |
+| `started_at` / `finished_at` | Timing                                            |
+
+### Run log (`memory/runs/{id}.md`)
+
+A markdown file Kevin appends to as he works. Human-readable, `cat`-able:
+
+```markdown
+# PLA-11: User search doesn't match Scandinavian characters
+
+## Assessment
+
+- Clarity: high — clear repro steps
+- Localizability: medium — likely in search service
+- Testability: high — existing search tests
+
+## Progress
+
+- 14:30 — Started, looking at search endpoint
+- 14:35 — Found it: services/search/handler.go uses ASCII comparison
+- 14:42 — Fix: use unicode.ToLower for normalization
+- 14:45 — Tests pass, creating PR
+
+## Result
+
+- PR: https://github.com/org/repo/pull/42
+- Files changed: 1
+- Tokens: ~45,000
+- Status: done
+```
+
+The DB is for querying (what's running, what's stuck, total cost today). The file is for the full narrative.
+
 ## What We Have Today vs What's Needed
 
 ### Have

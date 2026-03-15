@@ -12,7 +12,7 @@ type Restrictions struct {
 type ToolPolicy func(userID, channel string) Restrictions
 
 // PrivateServers is the list of MCP servers blocked for non-owners.
-var PrivateServers = []string{"gcal", "linear", "cron", "debug", "homeassistant", "browser", "slack"}
+var PrivateServers = []string{"gcal", "linear", "cron", "debug", "homeassistant", "browser", "slack", "bugfix"}
 
 // PolicyPaths defines directory access scopes.
 type PolicyPaths struct {

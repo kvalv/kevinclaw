@@ -69,7 +69,7 @@ func run(ctx context.Context) error {
 	}
 	defer sched.Stop(ctx)
 
-	mcpServers, mcpShutdown, err := setupMCPServers(ctx, env, cfg, sched)
+	mcpServers, mcpShutdown, err := setupMCPServers(ctx, env, cfg, sched, pool)
 	if err != nil {
 		return fmt.Errorf("mcp: %w", err)
 	}
@@ -93,6 +93,7 @@ func run(ctx context.Context) error {
 		}))
 
 	agent.StartDailyLogRotation(ctx, memoryDir)
+	agent.StartOrchestrator(ctx, pool, a, env.OWNER_USER_ID, 5*time.Minute, 15*time.Minute)
 
 	sc := slack.New(env.SLACK_BOT_TOKEN, env.SLACK_APP_TOKEN)
 	rl := util.NewPerHour(10)
@@ -158,7 +159,7 @@ func run(ctx context.Context) error {
 	})
 }
 
-func setupMCPServers(ctx context.Context, env config.Env, cfg *config.Config, sched *cron.Scheduler) (map[string]agent.MCPServer, func(), error) {
+func setupMCPServers(ctx context.Context, env config.Env, cfg *config.Config, sched *cron.Scheduler, pool *pgxpool.Pool) (map[string]agent.MCPServer, func(), error) {
 	servers := make(map[string]agent.MCPServer)
 	var shutdowns []func()
 
@@ -197,6 +198,10 @@ func setupMCPServers(ctx context.Context, env config.Env, cfg *config.Config, sc
 			URL:     "https://mcp.linear.app/mcp",
 			Headers: map[string]string{"Authorization": "Bearer " + env.LINEAR_API_KEY},
 		}
+	}
+
+	if err := serve("bugfix", mcp.BugfixServer(pool)); err != nil {
+		return nil, nil, err
 	}
 
 	if err := serve("slack", mcp.SlackServer(env.SLACK_BOT_TOKEN)); err != nil {
