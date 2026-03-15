@@ -36,15 +36,6 @@ type RunOpts struct {
 // Runner executes a claude query and returns stream-json output lines.
 type Runner func(ctx context.Context, prompt string, opts RunOpts) ([]string, error)
 
-// Restrictions returned by a Policy.
-type Restrictions struct {
-	DisallowedServers []string // MCP server names to block
-	AllowedTools      []string // if set, overrides default tool access
-}
-
-// Policy decides tool restrictions for a given message context.
-type Policy func(userID, channel string) Restrictions
-
 // SessionStore persists session IDs across restarts.
 type SessionStore interface {
 	GetSession(ctx context.Context, key string) (string, error)
@@ -73,7 +64,7 @@ type Agent struct {
 	cfg      Config
 	runner   Runner
 	sessions SessionStore
-	policy   Policy
+	policy   ToolPolicy
 }
 
 func New(cfg Config) *Agent {
@@ -96,7 +87,7 @@ func (a *Agent) WithSessionStore(s SessionStore) *Agent {
 	return a
 }
 
-func (a *Agent) WithPolicy(p Policy) *Agent {
+func (a *Agent) WithPolicy(p ToolPolicy) *Agent {
 	a.policy = p
 	return a
 }

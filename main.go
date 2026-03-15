@@ -94,15 +94,7 @@ func run(ctx context.Context) error {
 		PermissionMode: "bypassPermissions",
 		MCPServers:     mcpServers,
 		AllowedPaths:   []string{"~/src/main/a"},
-	}).WithSessionStore(d).WithPolicy(func(userID, channel string) agent.Restrictions {
-		if userID == env.OWNER_USER_ID {
-			return agent.Restrictions{} // owner gets everything
-		}
-		return agent.Restrictions{
-			DisallowedServers: []string{"gcal", "linear", "cron", "debug", "homeassistant"},
-			AllowedTools:      []string{"Read", "Glob", "Grep", "WebSearch", "WebFetch"},
-		}
-	})
+	}).WithSessionStore(d).WithPolicy(agent.NewOwnerPolicy(env.OWNER_USER_ID))
 
 	sc := slack.New(env.SLACK_BOT_TOKEN, env.SLACK_APP_TOKEN)
 

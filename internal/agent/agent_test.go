@@ -44,25 +44,15 @@ func TestHandleMessage_PolicyBlocksServers(t *testing.T) {
 		return []string{okResult}, nil
 	}
 
-	policy := func(userID, channel string) agent.Restrictions {
-		if userID == "owner" {
-			return agent.Restrictions{}
-		}
-		return agent.Restrictions{
-			DisallowedServers: []string{"gcal", "cron"},
-			AllowedTools:      []string{"Read", "Glob", "Grep"},
-		}
-	}
-
-	a := agent.New(agent.Config{}).WithRunner(captureOpts).WithPolicy(policy)
+	a := agent.New(agent.Config{}).WithRunner(captureOpts).WithPolicy(agent.NewOwnerPolicy("owner"))
 
 	t.Run("non-owner gets restricted", func(t *testing.T) {
 		a.HandleMessage(t.Context(), "k1", "hi", "stranger", "C123")
-		if len(gotOpts.DisallowedServers) != 2 {
-			t.Fatalf("expected 2 blocked servers, got %v", gotOpts.DisallowedServers)
+		if len(gotOpts.DisallowedServers) == 0 {
+			t.Fatal("expected blocked servers for non-owner")
 		}
-		if len(gotOpts.AllowedTools) != 3 {
-			t.Fatalf("expected 3 allowed tools, got %v", gotOpts.AllowedTools)
+		if gotOpts.AllowedTools == nil {
+			t.Fatal("expected restricted tools for non-owner")
 		}
 	})
 
@@ -72,7 +62,7 @@ func TestHandleMessage_PolicyBlocksServers(t *testing.T) {
 			t.Fatalf("expected 0 blocked servers, got %v", gotOpts.DisallowedServers)
 		}
 		if gotOpts.AllowedTools != nil {
-			t.Fatalf("expected nil allowed tools for owner, got %v", gotOpts.AllowedTools)
+			t.Fatalf("expected nil allowed tools, got %v", gotOpts.AllowedTools)
 		}
 	})
 }
