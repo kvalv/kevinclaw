@@ -29,6 +29,14 @@ type Env struct {
 type Config struct {
 	Paths         Paths         `yaml:"paths"`
 	HomeAssistant HomeAssistant `yaml:"homeassistant"`
+	HistoryLimit  int           `yaml:"history_limit"` // max channel messages as context (default 10)
+}
+
+func (c *Config) GetHistoryLimit() int {
+	if c.HistoryLimit <= 0 {
+		return 10
+	}
+	return c.HistoryLimit
 }
 
 type Paths struct {

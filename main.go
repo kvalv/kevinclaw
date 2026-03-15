@@ -65,7 +65,6 @@ func run(ctx context.Context) error {
 			return err
 		}
 		slog.Info("cron: job completed", "session_key", sessionKey, "reply_len", len(reply))
-		_ = reply
 		return nil
 	})
 	if err != nil {
@@ -98,7 +97,8 @@ func run(ctx context.Context) error {
 	logStartupInfo(a)
 	return sc.Listen(ctx, func(ev slack.Event) {
 		go func() {
-			if err := d.SaveMessage(ctx, ev.Channel, ev.ThreadTS, ev.MessageTS, ev.UserID, ev.Text); err != nil {
+			userName := sc.GetUserName(ev.UserID)
+			if err := d.SaveMessage(ctx, ev.Channel, ev.ThreadTS, ev.MessageTS, ev.UserID, userName, ev.Text); err != nil {
 				slog.Error("db: save message failed", "err", err)
 			}
 
@@ -107,7 +107,7 @@ func run(ctx context.Context) error {
 			}
 
 			// Fetch recent messages for context
-			history, err := d.RecentMessages(ctx, ev.Channel, ev.ThreadTS, 30)
+			history, err := d.RecentMessages(ctx, ev.Channel, ev.ThreadTS, cfg.GetHistoryLimit())
 			if err != nil {
 				slog.Warn("failed to fetch history", "err", err)
 			}

@@ -28,9 +28,10 @@ type SlackAPI interface {
 
 // Client wraps the Slack API for sending and receiving messages.
 type Client struct {
-	api      SlackAPI
-	raw      *slack.Client // needed for Socket Mode; nil when using a fake
-	appToken string
+	api       SlackAPI
+	raw       *slack.Client // needed for Socket Mode; nil when using a fake
+	appToken  string
+	userNames map[string]string // cache: user ID → display name
 }
 
 // New creates a new Slack client.
@@ -152,6 +153,31 @@ func (c *Client) AddReaction(ctx context.Context, channel, timestamp, emoji stri
 	}
 	slog.Debug("slack: reaction added", "channel", channel, "ts", timestamp, "emoji", emoji)
 	return nil
+}
+
+// GetUserName returns the display name for a Slack user ID, with caching.
+// Returns empty string on error (best-effort).
+func (c *Client) GetUserName(userID string) string {
+	if c.userNames == nil {
+		c.userNames = make(map[string]string)
+	}
+	if name, ok := c.userNames[userID]; ok {
+		return name
+	}
+	if c.raw == nil {
+		return ""
+	}
+	info, err := c.raw.GetUserInfo(userID)
+	if err != nil {
+		slog.Warn("slack: failed to get user info", "user_id", userID, "err", err)
+		return ""
+	}
+	name := info.Profile.DisplayName
+	if name == "" {
+		name = info.RealName
+	}
+	c.userNames[userID] = name
+	return name
 }
 
 // RemoveReaction removes an emoji reaction from a message.

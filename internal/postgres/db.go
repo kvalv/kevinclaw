@@ -18,10 +18,10 @@ func New(pool *pgxpool.Pool) *DB {
 }
 
 // SaveMessage stores a Slack message.
-func (d *DB) SaveMessage(ctx context.Context, channel, threadTS, messageTS, userID, text string) error {
+func (d *DB) SaveMessage(ctx context.Context, channel, threadTS, messageTS, userID, userName, text string) error {
 	_, err := d.pool.Exec(ctx,
-		`INSERT INTO messages (channel, thread_ts, message_ts, user_id, text) VALUES ($1, NULLIF($2, ''), $3, $4, $5)`,
-		channel, threadTS, messageTS, userID, text,
+		`INSERT INTO messages (channel, thread_ts, message_ts, user_id, user_name, text) VALUES ($1, NULLIF($2, ''), $3, $4, $5, $6)`,
+		channel, threadTS, messageTS, userID, userName, text,
 	)
 	if err != nil {
 		return fmt.Errorf("saving message: %w", err)
@@ -53,12 +53,12 @@ func (d *DB) RecentMessages(ctx context.Context, channel, threadTS string, limit
 	var args []any
 
 	if threadTS != "" {
-		query = `SELECT user_id, text, created_at FROM messages
+		query = `SELECT user_id, user_name, text, created_at FROM messages
 			WHERE channel = $1 AND thread_ts = $2
 			ORDER BY created_at ASC`
 		args = []any{channel, threadTS}
 	} else {
-		query = `SELECT user_id, text, created_at FROM messages
+		query = `SELECT user_id, user_name, text, created_at FROM messages
 			WHERE channel = $1 AND thread_ts IS NULL
 			ORDER BY created_at DESC LIMIT $2`
 		args = []any{channel, limit}
@@ -74,7 +74,7 @@ func (d *DB) RecentMessages(ctx context.Context, channel, threadTS string, limit
 	for rows.Next() {
 		var m agent.Message
 		var ts time.Time
-		if err := rows.Scan(&m.UserID, &m.Text, &ts); err != nil {
+		if err := rows.Scan(&m.UserID, &m.Name, &m.Text, &ts); err != nil {
 			return nil, fmt.Errorf("scanning message: %w", err)
 		}
 		m.Timestamp = ts.Format(time.RFC3339)

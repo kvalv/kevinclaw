@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS messages (
     thread_ts   TEXT,
     message_ts  TEXT NOT NULL,
     user_id     TEXT NOT NULL,
+    user_name   TEXT NOT NULL DEFAULT '',
     text        TEXT NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );

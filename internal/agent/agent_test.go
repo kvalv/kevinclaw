@@ -84,8 +84,8 @@ func TestHandleMessage_WithContext(t *testing.T) {
 	a := agent.New(agent.Config{}).WithRunner(capture)
 
 	history := []agent.Message{
-		{UserID: "U_ALICE", Text: "the deploy failed", Timestamp: "2026-03-15T09:00:00Z"},
-		{UserID: "U_BOB", Text: "which service?", Timestamp: "2026-03-15T09:01:00Z"},
+		{UserID: "U_ALICE", Name: "Alice", Text: "the deploy failed", Timestamp: "2026-03-15T09:00:00Z"},
+		{UserID: "U_BOB", Name: "Bob", Text: "which service?", Timestamp: "2026-03-15T09:01:00Z"},
 	}
 
 	a.HandleMessage(t.Context(), "k1", "fix it", "U_ALICE", "C123", agent.WithHistory(history))
@@ -95,6 +95,12 @@ func TestHandleMessage_WithContext(t *testing.T) {
 	}
 	if !strings.Contains(gotPrompt, "which service?") {
 		t.Errorf("expected context in prompt, got: %q", gotPrompt)
+	}
+	if !strings.Contains(gotPrompt, "U_ALICE (Alice)") {
+		t.Errorf("expected user ID with name in prompt, got: %q", gotPrompt)
+	}
+	if !strings.Contains(gotPrompt, "U_BOB (Bob)") {
+		t.Errorf("expected user ID with name in prompt, got: %q", gotPrompt)
 	}
 	if !strings.Contains(gotPrompt, "fix it") {
 		t.Errorf("expected actual message in prompt, got: %q", gotPrompt)

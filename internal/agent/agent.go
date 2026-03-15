@@ -96,6 +96,7 @@ func (a *Agent) WithToolPolicy(p ToolPolicy) *Agent {
 // Message is a recent message to include as context.
 type Message struct {
 	UserID    string
+	Name      string // display name (e.g. "Kevin"), resolved from Slack
 	Text      string
 	Timestamp string
 }
@@ -180,10 +181,16 @@ var promptTmpl = template.Must(template.New("prompt").Funcs(template.FuncMap{
 		}
 		return ts
 	},
+	"fmtUser": func(m Message) string {
+		if m.Name != "" {
+			return m.UserID + " (" + m.Name + ")"
+		}
+		return m.UserID
+	},
 }).Parse(`{{- if .History -}}
 Recent messages:
 {{ range .History -}}
-[{{ .UserID }} {{ fmtTime .Timestamp }}] {{ .Text }}
+[{{ fmtUser . }} {{ fmtTime .Timestamp }}] {{ .Text }}
 {{ end }}
 {{ end -}}
 {{ .Text }}`))

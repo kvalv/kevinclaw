@@ -18,16 +18,16 @@ func TestRecentMessages(t *testing.T) {
 	ctx := t.Context()
 
 	// Insert some channel messages (no thread)
-	d.SaveMessage(ctx, "C123", "", "ts1", "U_ALICE", "hello")
-	d.SaveMessage(ctx, "C123", "", "ts2", "U_BOB", "hey there")
-	d.SaveMessage(ctx, "C123", "", "ts3", "U_ALICE", "what's up")
+	d.SaveMessage(ctx, "C123", "", "ts1", "U_ALICE", "Alice", "hello")
+	d.SaveMessage(ctx, "C123", "", "ts2", "U_BOB", "Bob", "hey there")
+	d.SaveMessage(ctx, "C123", "", "ts3", "U_ALICE", "Alice", "what's up")
 
 	// Insert thread messages
-	d.SaveMessage(ctx, "C123", "ts1", "ts1.1", "U_BOB", "thread reply 1")
-	d.SaveMessage(ctx, "C123", "ts1", "ts1.2", "U_ALICE", "thread reply 2")
+	d.SaveMessage(ctx, "C123", "ts1", "ts1.1", "U_BOB", "Bob", "thread reply 1")
+	d.SaveMessage(ctx, "C123", "ts1", "ts1.2", "U_ALICE", "Alice", "thread reply 2")
 
 	// Different channel
-	d.SaveMessage(ctx, "C999", "", "ts4", "U_ALICE", "other channel")
+	d.SaveMessage(ctx, "C999", "", "ts4", "U_ALICE", "Alice", "other channel")
 
 	t.Run("channel messages", func(t *testing.T) {
 		msgs, err := d.RecentMessages(ctx, "C123", "", 10)
