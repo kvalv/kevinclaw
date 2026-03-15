@@ -36,7 +36,7 @@ Receives events, sends responses. The Go server calls this directly.
 - `UploadFile(channel, file)` — share files back
 
 **High-level interface (testable):**
-
+s
 ```go
 type SlackClient interface {
     // Inbound — returns a channel of events we care about

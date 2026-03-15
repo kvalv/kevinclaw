@@ -8,7 +8,6 @@ import (
 
 	"github.com/kvalv/kevinclaw/internal/cron"
 	"github.com/kvalv/kevinclaw/internal/testutil"
-	"github.com/kvalv/kevinclaw/migrations"
 )
 
 func TestPromptWorker_Integration(t *testing.T) {
@@ -16,10 +15,7 @@ func TestPromptWorker_Integration(t *testing.T) {
 		t.Skip("set DB_INTEGRATION=1 to run")
 	}
 
-	pool := testutil.NewPostgres(t, "")
-	if err := migrations.Run(t.Context(), pool); err != nil {
-		t.Fatalf("migrations: %v", err)
-	}
+	pool := testutil.NewPostgres(t)
 
 	done := make(chan struct{})
 	var gotKey, gotPrompt string

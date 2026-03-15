@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/kvalv/kevinclaw/migrations"
 )
 
 const mainDSN = "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
@@ -22,9 +23,9 @@ var mainPool = sync.OnceValue(func() *pgxpool.Pool {
 	return pool
 })
 
-// NewPostgres creates an isolated test database, runs the given migration SQL,
-// and returns a pool + cleanup function. The database is dropped on cleanup.
-func NewPostgres(t *testing.T, migrationSQL string) *pgxpool.Pool {
+// NewPostgres creates an isolated test database, runs all migrations
+// (app + River), and returns a pool. The database is dropped on t.Cleanup.
+func NewPostgres(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	dbName := randomName()
 
@@ -38,11 +39,9 @@ func NewPostgres(t *testing.T, migrationSQL string) *pgxpool.Pool {
 		t.Fatalf("testutil: connect to %s: %v", dbName, err)
 	}
 
-	if migrationSQL != "" {
-		if _, err := pool.Exec(t.Context(), migrationSQL); err != nil {
-			pool.Close()
-			t.Fatalf("testutil: migration on %s: %v", dbName, err)
-		}
+	if err := migrations.Run(t.Context(), pool); err != nil {
+		pool.Close()
+		t.Fatalf("testutil: migrations on %s: %v", dbName, err)
 	}
 
 	t.Cleanup(func() {
@@ -57,7 +56,6 @@ func teardown(dbName string) {
 	ctx := context.Background()
 	p := mainPool()
 
-	// Kill all connections
 	_, err := p.Exec(ctx, fmt.Sprintf(
 		"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '%s' AND pid <> pg_backend_pid()", dbName))
 	if err != nil {
