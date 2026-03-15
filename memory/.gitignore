@@ -1,0 +1,4 @@
+# Ignore everything except checked-in files
+*
+!.gitignore
+!KEVIN.md

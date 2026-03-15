@@ -22,7 +22,7 @@ type MCPServer struct {
 type Config struct {
 	IdleTimeout    time.Duration
 	WorkDir        string
-	SystemPrompt   string
+	SystemPrompt   func() string
 	MCPServers     map[string]MCPServer
 	PermissionMode string // e.g. "bypassPermissions"
 }

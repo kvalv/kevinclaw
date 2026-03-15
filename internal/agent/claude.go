@@ -96,8 +96,10 @@ func ClaudeRunner(cfg Config) Runner {
 			args = append(args, "--resume", opts.SessionID)
 		}
 
-		if cfg.SystemPrompt != "" {
-			args = append(args, "--system-prompt", cfg.SystemPrompt)
+		if cfg.SystemPrompt != nil {
+			if sp := cfg.SystemPrompt(); sp != "" {
+				args = append(args, "--system-prompt", sp)
+			}
 		}
 
 		if len(cfg.MCPServers) > 0 {

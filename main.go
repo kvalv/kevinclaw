@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	_ "embed"
 	"fmt"
 	"log/slog"
 	"os"
@@ -21,9 +20,6 @@ import (
 	"github.com/kvalv/kevinclaw/internal/slack"
 	"github.com/kvalv/kevinclaw/migrations"
 )
-
-//go:embed KEVIN.md
-var kevinPrompt string
 
 func main() {
 	setupLogger()
@@ -78,10 +74,13 @@ func run(ctx context.Context) error {
 	}
 	defer mcpShutdown()
 
+	memoryDir := filepath.Join(projectRoot(), "memory")
 	a = agent.New(agent.Config{
-		IdleTimeout:    5 * time.Minute,
-		WorkDir:        projectRoot(),
-		SystemPrompt:   kevinPrompt,
+		IdleTimeout: 5 * time.Minute,
+		WorkDir:     projectRoot(),
+		SystemPrompt: func() string {
+			return agent.BuildSystemPrompt(memoryDir, time.Now().Format(time.DateOnly))
+		},
 		PermissionMode: "bypassPermissions",
 		MCPServers:     mcpServers,
 	}).
