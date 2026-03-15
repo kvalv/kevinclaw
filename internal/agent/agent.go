@@ -15,8 +15,13 @@ import (
 type SessionKey string
 
 type MCPServer struct {
+	// HTTP transport
 	URL     string
 	Headers map[string]string // optional, e.g. {"Authorization": "Bearer xxx"}
+
+	// Stdio transport (if Command is set, URL is ignored)
+	Command string
+	Args    []string
 }
 
 type Config struct {

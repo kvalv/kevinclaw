@@ -36,8 +36,10 @@ type contentBlock struct {
 func buildMCPConfig(servers map[string]MCPServer) string {
 	type mcpServer struct {
 		Type    string            `json:"type"`
-		URL     string            `json:"url"`
+		URL     string            `json:"url,omitempty"`
 		Headers map[string]string `json:"headers,omitempty"`
+		Command string            `json:"command,omitempty"`
+		Args    []string          `json:"args,omitempty"`
 	}
 	cfg := struct {
 		MCPServers map[string]mcpServer `json:"mcpServers"`
@@ -45,7 +47,11 @@ func buildMCPConfig(servers map[string]MCPServer) string {
 		MCPServers: make(map[string]mcpServer, len(servers)),
 	}
 	for name, s := range servers {
-		cfg.MCPServers[name] = mcpServer{Type: "http", URL: s.URL, Headers: s.Headers}
+		if s.Command != "" {
+			cfg.MCPServers[name] = mcpServer{Type: "stdio", Command: s.Command, Args: s.Args}
+		} else {
+			cfg.MCPServers[name] = mcpServer{Type: "http", URL: s.URL, Headers: s.Headers}
+		}
 	}
 	// Write to temp file — claude CLI expects a file path or JSON string
 	f, err := os.CreateTemp("", "kevinclaw-mcp-*.json")

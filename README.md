@@ -6,7 +6,7 @@ A personal AI assistant that lives in Slack, powered by Claude Code. Kevin has t
 
 - Slack: Socket Mode, thread replies, typing indicators, emoji reactions
 - Claude Code CLI: subprocess per session, `--resume` for multi-turn memory
-- MCP servers: Google Calendar, Home Assistant, Cron (River + Postgres), Linear
+- MCP servers: Google Calendar, Home Assistant, Cron (River + Postgres), Linear, Browser (Chrome DevTools)
 - Tool policy: owner gets full scoped access, others get read-only public paths
 - Path scoping: Edit/Write/Read restricted to configured directories
 - Postgres: message history, session persistence, job scheduling
@@ -58,3 +58,17 @@ Key points:
 - User prompt = what's happening now. Recent Slack context + the new message.
 - Session continuity via `--resume` means Claude retains the full conversation within a thread.
 - Tool policy is enforced per-user: owner gets scoped file + MCP access, others get read-only public paths.
+
+## Browser Access
+
+Kevin has browser access via the [Chrome DevTools MCP](https://github.com/ChromeDevTools/chrome-devtools-mcp) server, which connects to Brave via the Chrome DevTools Protocol (CDP).
+
+**Default (headless):** Kevin launches Brave in headless mode automatically. No setup needed — used for automated screenshots and frontend testing during bug fixes.
+
+**Watch mode:** To see what Kevin is doing in real time, launch Brave yourself with remote debugging enabled:
+
+```bash
+brave --remote-debugging-port=9222
+```
+
+Then change the `browser` MCP config in `main.go` from `--headless` to `--browserUrl http://127.0.0.1:9222`. Kevin will connect to your running browser — you can watch pages load, see clicks happen, and inspect the same tabs he's working in.

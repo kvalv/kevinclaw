@@ -199,6 +199,16 @@ func setupMCPServers(ctx context.Context, env config.Env, cfg *config.Config, sc
 		}
 	}
 
+	if err := serve("slack", mcp.SlackServer(env.SLACK_BOT_TOKEN)); err != nil {
+		return nil, nil, err
+	}
+
+	// Chrome DevTools MCP — connects to Brave via CDP for browser automation
+	servers["browser"] = agent.MCPServer{
+		Command: "npx",
+		Args:    []string{"chrome-devtools-mcp", "--executablePath", "brave", "--headless"},
+	}
+
 	shutdown := func() {
 		for _, fn := range shutdowns {
 			fn()

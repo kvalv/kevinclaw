@@ -23,6 +23,9 @@ type Env struct {
 	LINEAR_API_KEY          string
 	HOMEASSISTANT_API_URL   string
 	HOMEASSISTANT_API_TOKEN string
+
+	REACT_APP_DEFAULT_USER     string
+	REACT_APP_DEFAULT_PASSWORD string
 }
 
 // Config holds runtime configuration loaded from kevin.yaml.
@@ -90,6 +93,9 @@ func LoadEnv() (Env, error) {
 	env.LINEAR_API_KEY, _ = requireEnv("LINEAR_API_KEY")
 	env.HOMEASSISTANT_API_URL, _ = requireEnv("HOMEASSISTANT_API_URL")
 	env.HOMEASSISTANT_API_TOKEN, _ = requireEnv("HOMEASSISTANT_API_TOKEN")
+
+	env.REACT_APP_DEFAULT_USER, _ = requireEnv("REACT_APP_DEFAULT_USER")
+	env.REACT_APP_DEFAULT_PASSWORD, _ = requireEnv("REACT_APP_DEFAULT_PASSWORD")
 
 	return env, nil
 }
