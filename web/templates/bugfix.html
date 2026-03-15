@@ -11,6 +11,7 @@
         .meta a { color: #58a6ff; text-decoration: none; }
         .status { padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
         .status-running { background: #1f6feb33; color: #58a6ff; }
+        .status-assessing { background: #1f6feb33; color: #58a6ff; }
         .status-review { background: #8957e533; color: #bc8cff; }
         .status-done { background: #23863633; color: #3fb950; }
         .status-failed { background: #da363333; color: #f85149; }
@@ -19,10 +20,12 @@
         .back { color: #8b949e; text-decoration: none; font-size: 13px; }
         .back:hover { color: #58a6ff; }
         .stream { background: #161b22; border: 1px solid #21262d; border-radius: 6px; padding: 16px; font-size: 12px; font-family: monospace; min-height: 300px; max-height: calc(100vh - 200px); overflow-y: auto; }
-        .line { padding: 1px 0; white-space: pre-wrap; word-break: break-all; }
+        .line { padding: 2px 0; white-space: pre-wrap; word-break: break-all; }
         .line-system { color: #484f58; }
-        .line-assistant { color: #c9d1d9; }
+        .line-text { color: #c9d1d9; }
+        .line-thinking { color: #484f58; font-style: italic; }
         .line-tool { color: #d2a8ff; }
+        .line-tool-result { color: #8b949e; }
         .line-result { color: #3fb950; font-weight: 600; }
         .line-error { color: #f85149; }
         .connected { color: #3fb950; font-size: 11px; }
@@ -40,57 +43,122 @@
     </p>
 
     <div class="stream" id="stream">
+        <div class="line line-system">loading logs...</div>
     </div>
 
     <script>
         const stream = document.getElementById("stream");
         const conn = document.getElementById("conn");
+        const runID = {{ .ID }};
 
-        function classForLine(line) {
-            try {
-                const ev = JSON.parse(line);
-                if (ev.type === "system") return "line-system";
-                if (ev.type === "result") return ev.subtype === "error" ? "line-error" : "line-result";
-                if (ev.type === "assistant") return "line-assistant";
-            } catch(e) {}
-            return "line-tool";
+        function classForEvent(ev) {
+            if (ev.type === "system") return "line-system";
+            if (ev.type === "result") return ev.subtype === "error" ? "line-error" : "line-result";
+            if (ev.type === "assistant" && ev.message) {
+                const c = ev.message.content || [];
+                if (c.some(b => b.type === "tool_use")) return "line-tool";
+                if (c.some(b => b.type === "thinking")) return "line-thinking";
+                return "line-text";
+            }
+            if (ev.type === "user") return "line-tool-result";
+            return "line-system";
         }
 
-        function formatLine(line) {
+        function formatEvent(ev) {
+            if (ev.type === "system" && ev.subtype === "init") {
+                return "[init] session=" + (ev.session_id || "").slice(0,12) + " model=" + (ev.model || "?") + " tools=" + ((ev.tools||[]).length);
+            }
+            if (ev.type === "system" && ev.subtype === "task_started") {
+                return "[task] " + (ev.description || "started");
+            }
+            if (ev.type === "assistant" && ev.message) {
+                const blocks = ev.message.content || [];
+                return blocks.map(b => {
+                    if (b.type === "text") return b.text;
+                    if (b.type === "thinking") return "[thinking] " + (b.thinking || "").slice(0, 150) + "...";
+                    if (b.type === "tool_use") return "[tool] " + b.name + "(" + JSON.stringify(b.input || {}).slice(0, 100) + ")";
+                    return "[" + b.type + "]";
+                }).join("\n");
+            }
+            if (ev.type === "user" && ev.tool_use_result) {
+                const r = ev.tool_use_result;
+                if (typeof r === "string") return "[result] " + r.slice(0, 200);
+                if (Array.isArray(r)) return "[result] " + r.map(x => (x.text||"").slice(0,150)).join(" ");
+                if (r.stdout !== undefined) {
+                    const out = (r.stdout || r.stderr || "").slice(0, 200);
+                    return "[result] " + (out || "(empty)");
+                }
+                return "[result] " + JSON.stringify(r).slice(0, 200);
+            }
+            if (ev.type === "result") {
+                return "[" + ev.subtype + "] " + (ev.result || "").slice(0, 300) + " (" + (ev.num_turns||0) + " turns, " + (ev.duration_ms||0) + "ms)";
+            }
+            return JSON.stringify(ev).slice(0, 300);
+        }
+
+        const roleColors = { angela: "#bc8cff", darryl: "#58a6ff", kevin: "#d29922" };
+
+        function addLine(raw, prepend) {
+            // Format: role\tjson
+            let role = "";
+            let json = raw;
+            const tab = raw.indexOf("\t");
+            if (tab > 0 && tab < 10) {
+                role = raw.slice(0, tab);
+                json = raw.slice(tab + 1);
+            }
+
             try {
-                const ev = JSON.parse(line);
-                if (ev.type === "system" && ev.subtype === "init") {
-                    return "session " + (ev.session_id || "").slice(0,12) + " model=" + (ev.model || "?");
-                }
-                if (ev.type === "assistant" && ev.message) {
-                    const blocks = ev.message.content || [];
-                    return blocks.map(b => {
-                        if (b.type === "text") return b.text;
-                        if (b.type === "tool_use") return "tool: " + b.name;
-                        if (b.type === "tool_result") return "tool_result";
-                        return b.type;
-                    }).join(" | ");
-                }
-                if (ev.type === "result") {
-                    return "[" + ev.subtype + "] " + (ev.result || "").slice(0, 200) + " (" + (ev.num_turns||0) + " turns)";
-                }
-                return line.slice(0, 300);
+                const ev = JSON.parse(json);
+                const cls = classForEvent(ev);
+                const text = formatEvent(ev);
+                const prefix = role ? '<span style="color:' + (roleColors[role]||"#8b949e") + ';font-weight:600">[' + role + ']</span> ' : '';
+                text.split("\n").forEach(line => {
+                    const div = document.createElement("div");
+                    div.className = "line " + cls;
+                    div.innerHTML = prefix + escapeHtml(line);
+                    if (prepend) stream.prepend(div);
+                    else stream.appendChild(div);
+                });
             } catch(e) {
-                return line.slice(0, 300);
+                const div = document.createElement("div");
+                div.className = "line line-system";
+                div.textContent = (role ? "[" + role + "] " : "") + json.slice(0, 300);
+                if (prepend) stream.prepend(div);
+                else stream.appendChild(div);
             }
         }
 
-        function addLine(line) {
-            const div = document.createElement("div");
-            div.className = "line " + classForLine(line);
-            const ts = new Date().toLocaleTimeString();
-            div.textContent = ts + "  " + formatLine(line);
-            stream.appendChild(div);
-            stream.scrollTop = stream.scrollHeight;
+        function escapeHtml(s) {
+            return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
         }
 
-        const es = new EventSource("/ui/events/{{ .ID }}");
-        es.onmessage = function(e) { addLine(e.data); };
+        // Load full log history
+        fetch("/ui/logs/" + runID)
+            .then(r => r.text())
+            .then(text => {
+                stream.innerHTML = "";
+                const lines = text.split("\n").filter(l => l.trim());
+                if (lines.length === 0) {
+                    stream.innerHTML = '<div class="line line-system">no logs yet</div>';
+                } else {
+                    lines.forEach(l => addLine(l, false));
+                    stream.scrollTop = stream.scrollHeight;
+                }
+            })
+            .catch(() => {
+                stream.innerHTML = '<div class="line line-system">failed to load logs</div>';
+            });
+
+        // SSE for live updates
+        const es = new EventSource("/ui/events/" + runID);
+        es.onmessage = function(e) {
+            // Remove "no logs yet" placeholder
+            const placeholder = stream.querySelector('.line-system');
+            if (placeholder && placeholder.textContent === "no logs yet") placeholder.remove();
+            addLine(e.data, false);
+            stream.scrollTop = stream.scrollHeight;
+        };
         es.onerror = function() {
             conn.textContent = "disconnected";
             conn.className = "disconnected";

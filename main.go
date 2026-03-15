@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -21,8 +23,13 @@ import (
 	"github.com/kvalv/kevinclaw/internal/util"
 	"github.com/kvalv/kevinclaw/migrations"
 	"github.com/kvalv/kevinclaw/web"
-	"net/http"
 )
+
+//go:embed prompts/angela.md
+var angelaPrompt string
+
+//go:embed prompts/darryl.md
+var darrylPrompt string
 
 func main() {
 	setupLogger()
@@ -71,20 +78,114 @@ func run(ctx context.Context) error {
 	}
 	defer sched.Stop(ctx)
 
-	mcpServers, mcpShutdown, err := setupMCPServers(ctx, env, cfg, sched, pool)
-	if err != nil {
-		return fmt.Errorf("mcp: %w", err)
-	}
-	defer mcpShutdown()
-
-	// Dashboard
-	dashboard := web.NewServer(pool)
+	// Dashboard (created early so spawner can reference the broker)
+	logsDir := filepath.Join(projectRoot(), "memory", "runs")
+	os.MkdirAll(logsDir, 0755)
+	dashboard := web.NewServer(pool, logsDir)
 	go func() {
 		slog.Info("dashboard: starting", "addr", "http://localhost:4646/ui")
 		if err := http.ListenAndServe(":4646", dashboard.Handler()); err != nil {
 			slog.Error("dashboard: failed", "err", err)
 		}
 	}()
+
+	// Agent spawner — uses indirection so MCP server captures the pointer,
+	// and we fill in the real implementation after MCP servers are set up.
+	var spawnAgent mcp.AgentSpawner
+	spawnerWrapper := func(ctx context.Context, role, prompt string, runID int64, issueID, workDir string) error {
+		return spawnAgent(ctx, role, prompt, runID, issueID, workDir)
+	}
+
+	mcpServers, mcpShutdown, err := setupMCPServers(ctx, env, cfg, sched, pool, spawnerWrapper)
+	if err != nil {
+		return fmt.Errorf("mcp: %w", err)
+	}
+	defer mcpShutdown()
+
+	// Now wire the real spawner with access to MCP server addresses
+	angelaMCPs := map[string]agent.MCPServer{
+		"bugfix": mcpServers["bugfix"],
+		"slack":  mcpServers["slack"],
+		"linear": mcpServers["linear"],
+	}
+	darrylMCPs := map[string]agent.MCPServer{
+		"bugfix": mcpServers["bugfix"],
+		"slack":  mcpServers["slack"],
+		"browser": {
+			Command: "npx",
+			Args:    []string{"chrome-devtools-mcp", "--executablePath", "brave", "--headless"},
+		},
+	}
+
+	appCtx := ctx // capture the app-level context for long-lived agents
+	spawnAgent = func(_ context.Context, role, prompt string, runID int64, issueID, workDir string) error {
+		// Expand ~ in workDir (Go doesn't do this automatically)
+		workDir = agent.ExpandPath(workDir)
+
+		var sp string
+		var mcps map[string]agent.MCPServer
+		switch role {
+		case "angela":
+			sp = angelaPrompt
+			mcps = angelaMCPs
+			if workDir == "" {
+				workDir = projectRoot()
+			}
+		case "darryl":
+			sp = darrylPrompt
+			mcps = darrylMCPs
+			if workDir == "" {
+				workDir = projectRoot()
+			}
+		default:
+			return fmt.Errorf("unknown agent role: %s", role)
+		}
+
+		sessionKey := fmt.Sprintf("%s:%s", role, issueID)
+
+		// Create persistent log file for this run
+		logDir := filepath.Join(projectRoot(), "memory", "runs")
+		os.MkdirAll(logDir, 0755)
+		logPath := filepath.Join(logDir, fmt.Sprintf("%s-%s.log", issueID, role))
+		logFile, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			slog.Error("spawner: failed to create log file", "path", logPath, "err", err)
+		}
+
+		runner := agent.ClaudeRunner(agent.Config{
+			WorkDir:        workDir,
+			SystemPrompt:   func() string { return sp },
+			PermissionMode: "bypassPermissions",
+			MCPServers:     mcps,
+			OnEvent: func(ev agent.StreamEvent) {
+				ev.Role = role
+				dashboard.Broker().Publish(runID, ev.Role, ev.Line)
+				if logFile != nil {
+					logFile.WriteString(role + "\t" + ev.Line + "\n")
+				}
+			},
+		})
+
+		go func() {
+			if logFile != nil {
+				defer logFile.Close()
+			}
+			slog.Info("spawner: launching agent", "role", role, "issue", issueID, "run_id", runID, "workdir", workDir)
+			lines, err := runner(appCtx, prompt, agent.RunOpts{
+				SessionKey: sessionKey,
+				RunID:      runID,
+			})
+			if err != nil {
+				slog.Error("spawner: agent failed", "role", role, "issue", issueID, "err", err)
+				pool.Exec(appCtx, `UPDATE bugfixes SET error=$1 WHERE id=$2`, err.Error(), runID)
+				return
+			}
+			result, _, _ := agent.ParseResponse(lines)
+			slog.Info("spawner: agent done", "role", role, "issue", issueID, "result_len", len(result))
+		}()
+
+		return nil
+	}
 
 	memoryDir := filepath.Join(projectRoot(), "memory")
 	systemPrompt := agent.BuildSystemPrompt(memoryDir, time.Now().Format(time.DateOnly))
@@ -95,7 +196,7 @@ func run(ctx context.Context) error {
 		PermissionMode: "bypassPermissions",
 		MCPServers:     mcpServers,
 		OnEvent: func(ev agent.StreamEvent) {
-			dashboard.Broker().Publish(ev.RunID, ev.Line)
+			dashboard.Broker().Publish(ev.RunID, "kevin", ev.Line)
 		},
 	}).
 		WithSessionStore(d).
@@ -172,7 +273,7 @@ func run(ctx context.Context) error {
 	})
 }
 
-func setupMCPServers(ctx context.Context, env config.Env, cfg *config.Config, sched *cron.Scheduler, pool *pgxpool.Pool) (map[string]agent.MCPServer, func(), error) {
+func setupMCPServers(ctx context.Context, env config.Env, cfg *config.Config, sched *cron.Scheduler, pool *pgxpool.Pool, spawn mcp.AgentSpawner) (map[string]agent.MCPServer, func(), error) {
 	servers := make(map[string]agent.MCPServer)
 	var shutdowns []func()
 
@@ -213,7 +314,7 @@ func setupMCPServers(ctx context.Context, env config.Env, cfg *config.Config, sc
 		}
 	}
 
-	if err := serve("bugfix", mcp.BugfixServer(pool)); err != nil {
+	if err := serve("bugfix", mcp.BugfixServer(pool, spawn)); err != nil {
 		return nil, nil, err
 	}
 

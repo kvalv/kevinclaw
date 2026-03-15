@@ -75,14 +75,14 @@ func expandToolPath(tool string) string {
 		if j := strings.Index(rest, ")"); j != -1 {
 			path := rest[:j]
 			suffix := rest[j:]
-			return prefix + expandPath(path) + suffix
+			return prefix + ExpandPath(path) + suffix
 		}
 	}
 	return tool
 }
 
-// expandPath expands ~ and environment variables in a path.
-func expandPath(p string) string {
+// ExpandPath expands ~ and environment variables in a path.
+func ExpandPath(p string) string {
 	if strings.HasPrefix(p, "~/") {
 		if home, err := os.UserHomeDir(); err == nil {
 			p = home + p[1:]

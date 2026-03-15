@@ -28,6 +28,7 @@ type MCPServer struct {
 type StreamEvent struct {
 	SessionKey string
 	RunID      int64  // bugfix ID, 0 if not a bugfix run
+	Role       string // "kevin", "angela", "darryl", or ""
 	Line       string // raw stream-json line
 }
 
@@ -175,7 +176,7 @@ func (a *Agent) HandleMessage(ctx context.Context, key SessionKey, text, userID,
 		return "", fmt.Errorf("running claude: %w", err)
 	}
 
-	result, newSessionID, err := parseResponse(lines)
+	result, newSessionID, err := ParseResponse(lines)
 	if err != nil {
 		slog.Error("agent: parse failed", "session_key", key, "err", err)
 		return "", err
@@ -230,7 +231,7 @@ func formatPrompt(text string, history []Message) string {
 	return buf.String()
 }
 
-func parseResponse(lines []string) (result string, sessionID string, err error) {
+func ParseResponse(lines []string) (result string, sessionID string, err error) {
 	for _, line := range lines {
 		var ev streamEvent
 		if err := json.Unmarshal([]byte(line), &ev); err != nil {

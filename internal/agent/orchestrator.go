@@ -1,13 +1,31 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
+	"text/template"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+var resumeTmpl = template.Must(template.New("resume").Parse(
+	`kevinclaw just restarted. These bugfixes need attention:
+{{.Items}}
+
+For each one, check the state via bugfix_get and decide:
+- 'running'/'assessing': the agent died — respawn via bugfix_start or bugfix_assess
+- 'review': check the PR for new comments
+Handle them now.`))
+
+var reviewPRTmpl = template.Must(template.New("reviewPR").Parse(
+	`Check PR {{.PRURL}} for new review comments on {{.IssueID}} ({{.Title}}).
+If there are changes requested, address them — push fixes, comment on what you changed, and update the bugfix via bugfix_update.
+If the PR has been approved and merged, update status to done with pr_merged: true.
+If no new comments, just update pr_last_checked_at via bugfix_update with id {{.ID}}.`))
 
 type bugfixRow struct {
 	ID            int64
@@ -28,7 +46,7 @@ type bugfixRow struct {
 // On startup, it resumes any bugfixes that were left in "running" state.
 func StartOrchestrator(ctx context.Context, pool *pgxpool.Pool, a *Agent, ownerID string, interval, stuckAfter time.Duration) {
 	go func() {
-		resumeRunningBugfixes(ctx, pool, a, ownerID)
+		resumeUnfinishedBugfixes(ctx, pool, a, ownerID)
 
 		// Wait a bit before first poll
 		select {
@@ -53,43 +71,46 @@ func StartOrchestrator(ctx context.Context, pool *pgxpool.Pool, a *Agent, ownerI
 	}()
 }
 
-// resumeRunningBugfixes picks up any bugfixes left in "running" state from a previous run.
-func resumeRunningBugfixes(ctx context.Context, pool *pgxpool.Pool, a *Agent, ownerID string) {
+// resumeUnfinishedBugfixes prompts Kevin about any bugfixes that need attention after restart.
+func resumeUnfinishedBugfixes(ctx context.Context, pool *pgxpool.Pool, a *Agent, ownerID string) {
 	rows, err := pool.Query(ctx,
-		`SELECT id, linear_issue_id, title, pr_url, session_id
-		 FROM bugfixes WHERE status = 'running' ORDER BY created_at`)
+		`SELECT id, linear_issue_id, title, status
+		 FROM bugfixes WHERE status IN ('running', 'assessing', 'review') ORDER BY created_at`)
 	if err != nil {
-		slog.Error("orchestrator: failed to query running bugfixes", "err", err)
+		slog.Error("orchestrator: failed to query unfinished bugfixes", "err", err)
 		return
 	}
 	defer rows.Close()
 
+	var items []string
 	for rows.Next() {
-		var b bugfixRow
-		if err := rows.Scan(&b.ID, &b.IssueID, &b.Title, &b.PRURL, &b.SessionID); err != nil {
-			slog.Error("orchestrator: scan failed", "err", err)
+		var id int64
+		var issueID, title, status string
+		if err := rows.Scan(&id, &issueID, &title, &status); err != nil {
 			continue
 		}
-
-		slog.Info("orchestrator: resuming bugfix from previous run", "id", b.ID, "issue", b.IssueID, "title", b.Title)
-
-		key := SessionKey(fmt.Sprintf("bugfix:%s", b.IssueID))
-
-		prompt := fmt.Sprintf(
-			"You were working on %s (%s) but the process was restarted. "+
-				"Pick up where you left off — check the bugfix state (id %d), "+
-				"review your progress in the run log and PR, and continue.",
-			b.IssueID, b.Title, b.ID)
-
-		go func(issueID string, id int64, key SessionKey, prompt string) {
-			reply, err := a.HandleMessage(ctx, key, prompt, ownerID, "", WithRunID(id))
-			if err != nil {
-				slog.Error("orchestrator: resume failed", "issue", issueID, "err", err)
-				return
-			}
-			slog.Info("orchestrator: resume done", "issue", issueID, "reply_len", len(reply))
-		}(b.IssueID, b.ID, key, prompt)
+		items = append(items, fmt.Sprintf("- #%d %s (%s) [%s]", id, issueID, title, status))
+		slog.Info("orchestrator: unfinished bugfix", "id", id, "issue", issueID, "status", status)
 	}
+
+	if len(items) == 0 {
+		return
+	}
+
+	var buf bytes.Buffer
+	resumeTmpl.Execute(&buf, struct{ Items string }{strings.Join(items, "\n")})
+	prompt := buf.String()
+
+	// Use Kevin's DM session key
+	key := SessionKey("orchestrator:startup")
+	go func() {
+		reply, err := a.HandleMessage(ctx, key, prompt, ownerID, "")
+		if err != nil {
+			slog.Error("orchestrator: startup resume failed", "err", err)
+			return
+		}
+		slog.Info("orchestrator: startup resume done", "reply_len", len(reply))
+	}()
 }
 
 // checkReviewPRs finds bugfixes in "review" status and prompts Kevin to check for new feedback.
@@ -116,13 +137,12 @@ func checkReviewPRs(ctx context.Context, pool *pgxpool.Pool, a *Agent, ownerID s
 		// Use the bugfix session key so Kevin resumes the same conversation
 		key := SessionKey(fmt.Sprintf("bugfix:%s", b.IssueID))
 
-		prompt := fmt.Sprintf(
-			"Check PR %s for new review comments on %s (%s). "+
-				"If there are changes requested, address them — push fixes, comment on what you changed, "+
-				"and update the bugfix via bugfix_update. "+
-				"If the PR has been approved and merged, update status to done with pr_merged: true. "+
-				"If no new comments, just update pr_last_checked_at via bugfix_update with id %d.",
-			*b.PRURL, b.IssueID, b.Title, b.ID)
+		var buf bytes.Buffer
+		reviewPRTmpl.Execute(&buf, struct {
+			PRURL, IssueID, Title string
+			ID                    int64
+		}{*b.PRURL, b.IssueID, b.Title, b.ID})
+		prompt := buf.String()
 
 		slog.Info("orchestrator: checking PR", "issue", b.IssueID, "pr", *b.PRURL)
 		count++

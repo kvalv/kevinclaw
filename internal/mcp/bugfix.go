@@ -1,17 +1,42 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"text/template"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// BugfixServer creates an MCP server for tracking bug bugfixs.
-func BugfixServer(pool *pgxpool.Pool) *sdkmcp.Server {
+var assessTmpl = template.Must(template.New("assess").Parse(`Assess Linear issue {{.IssueID}}: {{.Title}}
+URL: {{.IssueURL}}
+Bugfix ID: {{.ID}}
+
+Read the issue and comments in Linear. Score confidence on three axes:
+- Problem clarity (high/medium/low)
+- Localizability (high/medium/low)
+- Testability (high/medium/low)
+
+Hard skip if: needs product decision, touches >5 files, spans multiple services, no repro path.
+
+If all axes are high or medium:
+  1. Call bugfix_update with id={{.ID}}, confidence scores
+  2. Call bugfix_start with the issue context and a detailed prompt for the executor
+
+If any axis is low:
+  1. Call bugfix_update with id={{.ID}}, status='failed', error='reason'
+  2. Send a DM to the owner via slack_send_message explaining why`))
+
+// AgentSpawner launches a Claude subprocess in the background.
+// role is "angela" or "darryl". Returns immediately.
+type AgentSpawner func(ctx context.Context, role string, prompt string, runID int64, issueID string, workDir string) error
+
+// BugfixServer creates an MCP server for tracking and managing bugfixes.
+func BugfixServer(pool *pgxpool.Pool, spawn AgentSpawner) *sdkmcp.Server {
 	s := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "kevinclaw-bugfix", Version: "v0.0.1"}, nil)
 
 	s.AddTool(&sdkmcp.Tool{
@@ -241,6 +266,100 @@ func BugfixServer(pool *pgxpool.Pool) *sdkmcp.Server {
 
 		out, _ := json.MarshalIndent(runs, "", "  ")
 		return textResult("%s", string(out)), nil
+	})
+
+	// bugfix_assess — spawns Angela (assessor) in background
+	s.AddTool(&sdkmcp.Tool{
+		Name:        "bugfix_assess",
+		Description: "Spawn Angela (assessor) to evaluate a Linear issue. Returns immediately with run ID.",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"linear_issue_id":  {"type": "string", "description": "e.g. PLA-11"},
+				"linear_issue_url": {"type": "string"},
+				"title":            {"type": "string", "description": "Issue title"}
+			},
+			"required": ["linear_issue_id", "title"]
+		}`),
+	}, func(ctx context.Context, req *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
+		var args struct {
+			IssueID  string `json:"linear_issue_id"`
+			IssueURL string `json:"linear_issue_url"`
+			Title    string `json:"title"`
+		}
+		if err := json.Unmarshal(req.Params.Arguments, &args); err != nil {
+			return errResult("invalid arguments: %v", err), nil
+		}
+
+		logPath := fmt.Sprintf("memory/runs/%s.md", args.IssueID)
+
+		var id int64
+		err := pool.QueryRow(ctx,
+			`INSERT INTO bugfixes (linear_issue_id, linear_issue_url, title, log_path, status)
+			 VALUES ($1, $2, $3, $4, 'assessing')
+			 RETURNING id`,
+			args.IssueID, args.IssueURL, args.Title, logPath,
+		).Scan(&id)
+		if err != nil {
+			return errResult("create failed: %v", err), nil
+		}
+
+		var buf bytes.Buffer
+		assessTmpl.Execute(&buf, struct {
+			IssueID, Title, IssueURL string
+			ID                       int64
+		}{args.IssueID, args.Title, args.IssueURL, id})
+		prompt := buf.String()
+
+		if err := spawn(ctx, "angela", prompt, id, args.IssueID, ""); err != nil {
+			return errResult("spawn failed: %v", err), nil
+		}
+
+		return textResult("Angela is assessing %s (bugfix #%d)", args.IssueID, id), nil
+	})
+
+	// bugfix_start — spawns Darryl (executor) in background
+	s.AddTool(&sdkmcp.Tool{
+		Name:        "bugfix_start",
+		Description: "Spawn Darryl (executor) to fix a bug. Returns immediately.",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"id":            {"type": "number", "description": "Existing bugfix row ID"},
+				"prompt":        {"type": "string", "description": "Full context and instructions for the executor"},
+				"worktree_path": {"type": "string", "description": "Absolute path to git worktree"},
+				"branch":        {"type": "string", "description": "Git branch name"}
+			},
+			"required": ["id", "prompt", "worktree_path", "branch"]
+		}`),
+	}, func(ctx context.Context, req *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
+		var args struct {
+			ID       int64  `json:"id"`
+			Prompt   string `json:"prompt"`
+			Worktree string `json:"worktree_path"`
+			Branch   string `json:"branch"`
+		}
+		if err := json.Unmarshal(req.Params.Arguments, &args); err != nil {
+			return errResult("invalid arguments: %v", err), nil
+		}
+
+		// Update row to running
+		_, err := pool.Exec(ctx,
+			`UPDATE bugfixes SET status='running', worktree_path=$1, branch=$2, started_at=now() WHERE id=$3`,
+			args.Worktree, args.Branch, args.ID)
+		if err != nil {
+			return errResult("update failed: %v", err), nil
+		}
+
+		// Fetch issue ID for the session key
+		var issueID string
+		pool.QueryRow(ctx, `SELECT linear_issue_id FROM bugfixes WHERE id=$1`, args.ID).Scan(&issueID)
+
+		if err := spawn(ctx, "darryl", args.Prompt, args.ID, issueID, args.Worktree); err != nil {
+			return errResult("spawn failed: %v", err), nil
+		}
+
+		return textResult("Darryl is on it (bugfix #%d)", args.ID), nil
 	})
 
 	return s

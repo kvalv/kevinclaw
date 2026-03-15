@@ -8,7 +8,9 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -27,14 +29,16 @@ var templates = template.Must(
 
 // Server serves the Kevin dashboard.
 type Server struct {
-	pool   *pgxpool.Pool
-	broker *SSEBroker
+	pool    *pgxpool.Pool
+	broker  *SSEBroker
+	logsDir string // directory where run logs are stored
 }
 
-func NewServer(pool *pgxpool.Pool) *Server {
+func NewServer(pool *pgxpool.Pool, logsDir string) *Server {
 	return &Server{
-		pool:   pool,
-		broker: NewSSEBroker(),
+		pool:    pool,
+		broker:  NewSSEBroker(),
+		logsDir: logsDir,
 	}
 }
 
@@ -48,6 +52,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/ui/events", s.handleSSE)
 	mux.HandleFunc("/ui/events/", s.handleRunSSE)
 	mux.HandleFunc("/ui/bugfix/", s.handleBugfix)
+	mux.HandleFunc("/ui/logs/", s.handleLogs)
 	return mux
 }
 
@@ -145,6 +150,40 @@ func (s *Server) handleBugfix(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
 	if err := templates.ExecuteTemplate(w, "bugfix.html", d); err != nil {
 		slog.Error("web: template error", "err", err)
+	}
+}
+
+// handleLogs returns the raw log lines for a bugfix, reading all log files matching the issue ID.
+func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
+	idStr := strings.TrimPrefix(r.URL.Path, "/ui/logs/")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+
+	// Get issue ID from DB
+	var issueID string
+	err = s.pool.QueryRow(r.Context(),
+		`SELECT linear_issue_id FROM bugfixes WHERE id = $1`, id,
+	).Scan(&issueID)
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	// Read all log files matching this issue (angela + darryl)
+	w.Header().Set("Content-Type", "application/json")
+	entries, _ := os.ReadDir(s.logsDir)
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), issueID+"-") || !strings.HasSuffix(e.Name(), ".log") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(s.logsDir, e.Name()))
+		if err != nil {
+			continue
+		}
+		w.Write(data)
 	}
 }
 
@@ -359,15 +398,17 @@ func (b *SSEBroker) Unsubscribe(ch chan string) {
 }
 
 // Publish sends an event to matching subscribers.
-func (b *SSEBroker) Publish(runID int64, msg string) {
+// The role (e.g. "angela", "darryl", "kevin") is prepended as a tab-separated prefix.
+func (b *SSEBroker) Publish(runID int64, role, msg string) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
+	line := role + "\t" + msg
 	for _, s := range b.subs {
 		if s.runID != 0 && s.runID != runID {
 			continue
 		}
 		select {
-		case s.ch <- msg:
+		case s.ch <- line:
 		default:
 		}
 	}

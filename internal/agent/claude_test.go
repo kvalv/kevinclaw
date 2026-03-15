@@ -61,7 +61,7 @@ func TestClaudeRunner_Integration(t *testing.T) {
 	}
 
 	// Parse should find a result
-	result, sessionID, err := parseResponse(lines)
+	result, sessionID, err := ParseResponse(lines)
 	if err != nil {
 		t.Fatalf("parseResponse: %v", err)
 	}

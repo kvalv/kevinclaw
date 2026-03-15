@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS bugfixes (
     linear_issue_id      TEXT NOT NULL,                          -- e.g. "PLA-11"
     linear_issue_url     TEXT,
     title                TEXT NOT NULL,                          -- issue title
-    status               TEXT NOT NULL DEFAULT 'pending',        -- pending, running, review, stuck, done, failed, killed
+    status               TEXT NOT NULL DEFAULT 'pending',        -- pending, assessing, running, review, stuck, done, failed, killed
     worktree_path        TEXT,                                   -- e.g. /home/user/src/main/kevin-1
     branch               TEXT,                                   -- e.g. kevin/PLA-11-scandinavian-search
     session_id           TEXT,                                   -- Claude session ID for --resume

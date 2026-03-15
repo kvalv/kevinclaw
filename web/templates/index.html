@@ -139,12 +139,34 @@
                 document.getElementById("last-refresh").textContent = new Date().toLocaleTimeString();
             } catch(err) {}
         });
+        const roleColors = { angela: "#bc8cff", darryl: "#58a6ff", kevin: "#d29922" };
+        function formatEvent(raw) {
+            let role = "", json = raw;
+            const tab = raw.indexOf("\t");
+            if (tab > 0 && tab < 10) { role = raw.slice(0, tab); json = raw.slice(tab + 1); }
+            const prefix = role ? '<span style="color:' + (roleColors[role]||"#8b949e") + ';font-weight:600">[' + role + ']</span> ' : '';
+            try {
+                const ev = JSON.parse(json);
+                if (ev.type === "system" && ev.subtype === "init") return prefix + "[init] session=" + (ev.session_id||"").slice(0,8);
+                if (ev.type === "assistant" && ev.message) {
+                    return prefix + (ev.message.content||[]).map(b => {
+                        if (b.type === "text") return b.text.slice(0,150);
+                        if (b.type === "tool_use") return '<span style="color:#d2a8ff">[tool] ' + b.name + '</span>';
+                        if (b.type === "thinking") return '<span style="color:#484f58">[thinking]</span>';
+                        return "[" + b.type + "]";
+                    }).join(" ");
+                }
+                if (ev.type === "user" && ev.tool_use_result) return prefix + '<span style="color:#8b949e">[result]</span>';
+                if (ev.type === "result") return prefix + '<span style="color:#3fb950">[' + ev.subtype + '] ' + (ev.result||"").slice(0,100) + '</span>';
+                return prefix + json.slice(0, 100);
+            } catch(e) { return prefix + json.slice(0, 100); }
+        }
         es.onmessage = function(e) {
             gotEvent = true;
             if (container.querySelector('.info')) container.innerHTML = '';
             const div = document.createElement("div");
             div.className = "event";
-            div.innerHTML = '<span class="ts">' + new Date().toLocaleTimeString() + '</span> ' + e.data;
+            div.innerHTML = '<span class="ts">' + new Date().toLocaleTimeString() + '</span> ' + formatEvent(e.data);
             container.prepend(div);
             while (container.children.length > 200) container.removeChild(container.lastChild);
         };

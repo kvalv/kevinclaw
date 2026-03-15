@@ -10,14 +10,14 @@ import (
 	"github.com/kvalv/kevinclaw/internal/testutil"
 )
 
-func TestResumeRunningBugfixes(t *testing.T) {
+func TestResumeUnfinishedBugfixes(t *testing.T) {
 	if testing.Short() {
 		t.Skip("requires postgres")
 	}
 	pool := testutil.NewPostgres(t)
 	ctx := t.Context()
 
-	// Insert a bugfix in "running" state (simulating a previous run that was interrupted)
+	// Insert bugfixes in various unfinished states
 	_, err := pool.Exec(ctx,
 		`INSERT INTO bugfixes (linear_issue_id, title, status, worktree_path, branch, started_at)
 		 VALUES ('PLA-99', 'Test resume bug', 'running', '/tmp/wt', 'kevin/PLA-99-test', now())`)
@@ -25,13 +25,11 @@ func TestResumeRunningBugfixes(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
-	okResult := `{"type":"result","subtype":"success","result":"resumed","session_id":"s1"}`
+	okResult := `{"type":"result","subtype":"success","result":"ok","session_id":"s1"}`
 
 	var gotPrompt string
-	var gotRunID int64
 	capture := func(_ context.Context, prompt string, opts agent.RunOpts) ([]string, error) {
 		gotPrompt = prompt
-		gotRunID = opts.RunID
 		return []string{okResult}, nil
 	}
 
@@ -51,7 +49,7 @@ func TestResumeRunningBugfixes(t *testing.T) {
 	if !strings.Contains(gotPrompt, "restarted") {
 		t.Errorf("expected 'restarted' in prompt, got: %q", gotPrompt)
 	}
-	if gotRunID == 0 {
-		t.Error("expected non-zero RunID")
+	if !strings.Contains(gotPrompt, "running") {
+		t.Errorf("expected status in prompt, got: %q", gotPrompt)
 	}
 }
