@@ -91,6 +91,8 @@ func run(ctx context.Context) error {
 			Public: cfg.Paths.Public,
 		}))
 
+	agent.StartDailyLogRotation(ctx, memoryDir)
+
 	sc := slack.New(env.SLACK_BOT_TOKEN, env.SLACK_APP_TOKEN)
 
 	logStartupInfo(a)
