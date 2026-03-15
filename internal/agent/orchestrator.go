@@ -25,9 +25,12 @@ type bugfixRow struct {
 // It checks for:
 // - PRs in "review" status that may have new comments
 // - Runs in "running" status that may be stuck (no update in stuckAfter)
+// On startup, it resumes any bugfixes that were left in "running" state.
 func StartOrchestrator(ctx context.Context, pool *pgxpool.Pool, a *Agent, ownerID string, interval, stuckAfter time.Duration) {
 	go func() {
-		// Wait a bit before first poll to let everything start up
+		resumeRunningBugfixes(ctx, pool, a, ownerID)
+
+		// Wait a bit before first poll
 		select {
 		case <-time.After(30 * time.Second):
 		case <-ctx.Done():
@@ -48,6 +51,45 @@ func StartOrchestrator(ctx context.Context, pool *pgxpool.Pool, a *Agent, ownerI
 			}
 		}
 	}()
+}
+
+// resumeRunningBugfixes picks up any bugfixes left in "running" state from a previous run.
+func resumeRunningBugfixes(ctx context.Context, pool *pgxpool.Pool, a *Agent, ownerID string) {
+	rows, err := pool.Query(ctx,
+		`SELECT id, linear_issue_id, title, pr_url, session_id
+		 FROM bugfixes WHERE status = 'running' ORDER BY created_at`)
+	if err != nil {
+		slog.Error("orchestrator: failed to query running bugfixes", "err", err)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var b bugfixRow
+		if err := rows.Scan(&b.ID, &b.IssueID, &b.Title, &b.PRURL, &b.SessionID); err != nil {
+			slog.Error("orchestrator: scan failed", "err", err)
+			continue
+		}
+
+		slog.Info("orchestrator: resuming bugfix from previous run", "id", b.ID, "issue", b.IssueID, "title", b.Title)
+
+		key := SessionKey(fmt.Sprintf("bugfix:%s", b.IssueID))
+
+		prompt := fmt.Sprintf(
+			"You were working on %s (%s) but the process was restarted. "+
+				"Pick up where you left off — check the bugfix state (id %d), "+
+				"review your progress in the run log and PR, and continue.",
+			b.IssueID, b.Title, b.ID)
+
+		go func(issueID string, id int64, key SessionKey, prompt string) {
+			reply, err := a.HandleMessage(ctx, key, prompt, ownerID, "", WithRunID(id))
+			if err != nil {
+				slog.Error("orchestrator: resume failed", "issue", issueID, "err", err)
+				return
+			}
+			slog.Info("orchestrator: resume done", "issue", issueID, "reply_len", len(reply))
+		}(b.IssueID, b.ID, key, prompt)
+	}
 }
 
 // checkReviewPRs finds bugfixes in "review" status and prompts Kevin to check for new feedback.

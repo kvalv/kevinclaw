@@ -111,16 +111,14 @@ npm run dev:proxy &
 
 Wait for the server to be ready (check `http://localhost:3000`), then:
 
-1. **Before screenshot** — navigate to the page that shows the bug, take a screenshot
+1. **Before screenshot** — navigate to the page that shows the bug, take a screenshot with the browser MCP, save to `/tmp/{issue-id}-before.png`
 
    ```bash
-   # Use browser MCP to navigate and screenshot
-   # Save to worktree: screenshots/before.png
-   git add screenshots/before.png && git commit -m "Add before screenshot" && git push
-   gh pr comment {pr-number} --body '## Before
-   ![before](screenshots/before.png)
+   BEFORE_URL=$(upload-screenshot /tmp/{issue-id}-before.png {issue-id}-before)
+   gh pr comment {pr-number} --body "## Before
+   ![before]($BEFORE_URL)
 
-   {description of what is wrong}'
+   {description of what is wrong}"
    ```
 
 2. **Implement the fix**
@@ -128,14 +126,16 @@ Wait for the server to be ready (check `http://localhost:3000`), then:
 3. **After screenshot** — same page, showing the fix works
 
    ```bash
-   git add screenshots/after.png && git commit -m "Add after screenshot" && git push
-   gh pr comment {pr-number} --body '## After
-   ![after](screenshots/after.png)
+   AFTER_URL=$(upload-screenshot /tmp/{issue-id}-after.png {issue-id}-after)
+   gh pr comment {pr-number} --body "## After
+   ![after]($AFTER_URL)
 
-   {description of what changed}'
+   {description of what changed}"
    ```
 
 4. Kill the dev server when done: `kill %1`
+
+`upload-screenshot` uploads to a private GitHub release and returns an org-scoped URL.
 
 ### Progress comments
 

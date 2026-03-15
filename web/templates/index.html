@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Kevin Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace; background: #0d1117; color: #c9d1d9; padding: 24px; }
+        h1 { color: #58a6ff; margin-bottom: 8px; font-size: 20px; }
+        .subtitle { color: #8b949e; margin-bottom: 24px; font-size: 13px; }
+        .section { margin-bottom: 32px; }
+        .section h2 { color: #8b949e; font-size: 13px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
+        table { width: 100%; border-collapse: collapse; }
+        th { text-align: left; color: #8b949e; font-size: 12px; padding: 8px 12px; border-bottom: 1px solid #21262d; }
+        td { padding: 8px 12px; border-bottom: 1px solid #21262d; font-size: 13px; }
+        tr:hover { background: #161b22; }
+        a { color: #58a6ff; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .status { padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+        .status-running { background: #1f6feb33; color: #58a6ff; }
+        .status-review { background: #8957e533; color: #bc8cff; }
+        .status-done { background: #23863633; color: #3fb950; }
+        .status-failed { background: #da363333; color: #f85149; }
+        .status-stuck { background: #9e6a0333; color: #d29922; }
+        .status-killed { background: #21262d; color: #8b949e; }
+        .status-pending { background: #21262d; color: #8b949e; }
+        .processes { margin-bottom: 24px; }
+        .process { background: #161b22; border: 1px solid #21262d; border-radius: 6px; padding: 12px 16px; margin-bottom: 8px; font-size: 13px; }
+        .process .pid { color: #58a6ff; font-weight: 600; }
+        .process .meta { color: #8b949e; }
+        .empty { color: #484f58; font-style: italic; padding: 12px; }
+        .events { background: #161b22; border: 1px solid #21262d; border-radius: 6px; padding: 16px; max-height: 400px; overflow-y: auto; font-size: 12px; font-family: monospace; }
+        .event { padding: 2px 0; }
+        .event .ts { color: #484f58; }
+        .event .tool { color: #d2a8ff; }
+        .event .info { color: #8b949e; }
+        .auto-refresh { color: #484f58; font-size: 11px; float: right; }
+    </style>
+</head>
+<body>
+    <h1>Kevin Dashboard</h1>
+    <p class="subtitle">last refreshed: <span id="last-refresh">{{ .Now.Format "15:04:05" }}</span> <span class="auto-refresh">live</span></p>
+
+    <div class="section">
+        <h2>Processes</h2>
+        <div id="processes">
+        {{ if .Processes }}
+            {{ range .Processes }}
+            <div class="process">
+                <span class="pid">PID {{ .PID }}</span>
+                <span class="meta">CPU {{ .CPU }}% &middot; MEM {{ .Mem }}% &middot; started {{ .Started }}</span>
+                {{ if .SessionID }}<span class="meta">&middot; session {{ .SessionID }}</span>{{ end }}
+            </div>
+            {{ end }}
+        {{ else }}
+        <p class="empty">no claude processes running</p>
+        {{ end }}
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Bugfixes</h2>
+        <div id="bugfixes">
+        {{ if .Bugfixes }}
+        <table>
+            <tr>
+                <th>ID</th>
+                <th>Issue</th>
+                <th>Title</th>
+                <th>Status</th>
+                <th>PR</th>
+                <th>Since Update</th>
+                <th>Started</th>
+            </tr>
+            {{ range .Bugfixes }}
+            <tr>
+                <td><a href="/ui/bugfix/{{ .ID }}">#{{ .ID }}</a></td>
+                <td><a href="https://linear.app/ignite-eu/issue/{{ .IssueID }}">{{ .IssueID }}</a></td>
+                <td>{{ .Title }}</td>
+                <td><span class="status status-{{ .Status }}">{{ .Status }}</span></td>
+                <td>{{ if .PRURL }}<a href="{{ .PRURL }}">PR</a>{{ if .PRMerged }} (merged){{ end }}{{ else }}-{{ end }}</td>
+                <td>{{ .SinceUpdate }}</td>
+                <td>{{ if .StartedAt }}{{ .StartedAt.Format "15:04" }}{{ else }}-{{ end }}</td>
+            </tr>
+            {{ end }}
+        </table>
+        {{ else }}
+        <p class="empty">no bugfixes</p>
+        {{ end }}
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Live Events</h2>
+        <div class="events" id="events">
+            <div class="event"><span class="info">connecting...</span></div>
+        </div>
+    </div>
+
+    <script>
+        const container = document.getElementById("events");
+        const es = new EventSource("/ui/events");
+        let gotEvent = false;
+        es.onopen = function() {
+            if (!gotEvent) container.innerHTML = '<div class="event"><span class="info">waiting for events...</span></div>';
+        };
+        es.addEventListener("state", function(e) {
+            try {
+                const state = JSON.parse(e.data);
+                // Update processes
+                const procs = document.getElementById("processes");
+                if (state.processes && state.processes.length > 0) {
+                    procs.innerHTML = state.processes.map(p =>
+                        '<div class="process"><span class="pid">PID ' + p.pid + '</span> ' +
+                        '<span class="meta">CPU ' + p.cpu + '% &middot; MEM ' + p.mem + '% &middot; started ' + p.started + '</span>' +
+                        (p.session_id ? ' <span class="meta">&middot; session ' + p.session_id + '</span>' : '') +
+                        '</div>'
+                    ).join('');
+                } else {
+                    procs.innerHTML = '<p class="empty">no claude processes running</p>';
+                }
+                // Update bugfixes
+                const bugs = document.getElementById("bugfixes");
+                if (state.bugfixes && state.bugfixes.length > 0) {
+                    bugs.innerHTML = '<table><tr><th>ID</th><th>Issue</th><th>Title</th><th>Status</th><th>PR</th><th>Since Update</th><th>Started</th></tr>' +
+                        state.bugfixes.map(b =>
+                            '<tr><td><a href="/ui/bugfix/' + b.id + '">#' + b.id + '</a></td>' +
+                            '<td><a href="https://linear.app/ignite-eu/issue/' + b.issue_id + '">' + b.issue_id + '</a></td>' +
+                            '<td>' + b.title + '</td>' +
+                            '<td><span class="status status-' + b.status + '">' + b.status + '</span></td>' +
+                            '<td>' + (b.pr_url ? '<a href="' + b.pr_url + '">PR</a>' + (b.pr_merged ? ' (merged)' : '') : '-') + '</td>' +
+                            '<td>' + b.since_update + '</td>' +
+                            '<td>' + (b.started_at || '-') + '</td></tr>'
+                        ).join('') + '</table>';
+                } else {
+                    bugs.innerHTML = '<p class="empty">no bugfixes</p>';
+                }
+                // Update timestamp
+                document.getElementById("last-refresh").textContent = new Date().toLocaleTimeString();
+            } catch(err) {}
+        });
+        es.onmessage = function(e) {
+            gotEvent = true;
+            if (container.querySelector('.info')) container.innerHTML = '';
+            const div = document.createElement("div");
+            div.className = "event";
+            div.innerHTML = '<span class="ts">' + new Date().toLocaleTimeString() + '</span> ' + e.data;
+            container.prepend(div);
+            while (container.children.length > 200) container.removeChild(container.lastChild);
+        };
+        es.onerror = function() {
+            container.innerHTML = '<div class="event"><span class="info">disconnected</span></div>';
+        };
+    </script>
+</body>
+</html>

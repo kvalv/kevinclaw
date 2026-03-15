@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -111,7 +112,7 @@ func ClaudeRunner(cfg Config) Runner {
 
 		if len(cfg.MCPServers) > 0 {
 			mcpConfig := buildMCPConfig(cfg.MCPServers)
-			args = append(args, "--mcp-config", mcpConfig)
+			args = append(args, "--mcp-config", mcpConfig, "--strict-mcp-config")
 		}
 
 		if len(opts.AllowedTools) > 0 {
@@ -132,7 +133,7 @@ func ClaudeRunner(cfg Config) Runner {
 			for _, name := range opts.DisallowedServers {
 				patterns = append(patterns, fmt.Sprintf("mcp__%s__*", name))
 			}
-			args = append(args, "--disallowedTools", strings.Join(patterns, " "))
+			args = append(args, "--disallowedTools", strings.Join(patterns, ","))
 		}
 
 		args = append(args, prompt)
@@ -142,8 +143,11 @@ func ClaudeRunner(cfg Config) Runner {
 			cmd.Dir = cfg.WorkDir
 		}
 
-		var stdout, stderr bytes.Buffer
-		cmd.Stdout = &stdout
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			return nil, fmt.Errorf("stdout pipe: %w", err)
+		}
+		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
 
 		if err := cmd.Start(); err != nil {
@@ -151,8 +155,37 @@ func ClaudeRunner(cfg Config) Runner {
 		}
 		slog.Info("claude: spawned", "pid", cmd.Process.Pid, "session_id", opts.SessionID, "workdir", cfg.WorkDir)
 
-		err := cmd.Wait()
-		slog.Info("claude: exited", "pid", cmd.Process.Pid, "exit_code", cmd.ProcessState.ExitCode())
+		// Stream stdout line by line
+		var lines []string
+		scanner := bufio.NewScanner(stdout)
+		scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // 1MB buffer for large lines
+		for scanner.Scan() {
+			line := scanner.Text()
+			if line == "" {
+				continue
+			}
+			lines = append(lines, line)
+
+			// Emit event for live streaming
+			if cfg.OnEvent != nil {
+				cfg.OnEvent(StreamEvent{
+					SessionKey: opts.SessionKey,
+					RunID:      opts.RunID,
+					Line:       line,
+				})
+			}
+		}
+
+		if scanErr := scanner.Err(); scanErr != nil {
+			slog.Error("claude: scanner error", "err", scanErr)
+		}
+
+		err = cmd.Wait()
+		slog.Info("claude: exited", "pid", cmd.Process.Pid, "exit_code", cmd.ProcessState.ExitCode(), "lines", len(lines), "stderr_len", stderr.Len())
+
+		if stderr.Len() > 0 {
+			slog.Debug("claude: stderr", "output", stderr.String())
+		}
 
 		if err != nil {
 			if exitErr, ok := err.(*exec.ExitError); ok {
@@ -162,13 +195,6 @@ func ClaudeRunner(cfg Config) Runner {
 			return nil, err
 		}
 
-		var lines []string
-		for _, line := range strings.Split(strings.TrimSpace(stdout.String()), "\n") {
-			if line != "" {
-				lines = append(lines, line)
-			}
-		}
-		slog.Debug("claude: finished", "output_lines", len(lines))
 		return lines, nil
 	}
 }

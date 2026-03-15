@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# upload-screenshot FILE [NAME]
+# Uploads a screenshot to the Kevin Screenshots release and prints the URL.
+# NAME defaults to the filename.
+
+set -euo pipefail
+
+FILE="${1:?Usage: upload-screenshot FILE [NAME]}"
+NAME="${2:-$(basename "$FILE")}"
+REPO="ignite-analytics/main"
+TAG="screenshots"
+
+# Ensure .png extension
+[[ "$NAME" == *.png ]] || NAME="${NAME}.png"
+
+# Upload (clobber if exists)
+gh release upload "$TAG" "$FILE" --repo "$REPO" --clobber 2>/dev/null
+
+# Print the download URL
+gh release view "$TAG" --repo "$REPO" --json assets --jq ".assets[] | select(.name == \"$NAME\") | .url"

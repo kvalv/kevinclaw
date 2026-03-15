@@ -24,12 +24,20 @@ type MCPServer struct {
 	Args    []string
 }
 
+// StreamEvent is emitted for each line of claude's stream-json output.
+type StreamEvent struct {
+	SessionKey string
+	RunID      int64  // bugfix ID, 0 if not a bugfix run
+	Line       string // raw stream-json line
+}
+
 type Config struct {
 	IdleTimeout    time.Duration
 	WorkDir        string
 	SystemPrompt   func() string
 	MCPServers     map[string]MCPServer
 	PermissionMode string // e.g. "bypassPermissions"
+	OnEvent        func(StreamEvent)
 }
 
 // RunOpts are per-invocation options passed to the Runner.
@@ -37,6 +45,8 @@ type RunOpts struct {
 	SessionID         string
 	DisallowedServers []string // MCP server names to block (e.g. "gcal")
 	AllowedTools      []string // if non-empty, restricts built-in tools (overrides Config.AllowedPaths)
+	SessionKey        string   // for event routing
+	RunID             int64    // bugfix run ID, 0 if not a bugfix
 }
 
 // Runner executes a claude query and returns stream-json output lines.
@@ -111,11 +121,17 @@ type MessageOption func(*messageOpts)
 
 type messageOpts struct {
 	history []Message
+	runID   int64
 }
 
 // WithHistory prepends recent messages as context.
 func WithHistory(msgs []Message) MessageOption {
 	return func(o *messageOpts) { o.history = msgs }
+}
+
+// WithRunID tags this message as part of a bugfix run.
+func WithRunID(id int64) MessageOption {
+	return func(o *messageOpts) { o.runID = id }
 }
 
 // HandleMessage sends a prompt to claude and returns the text response.
@@ -150,6 +166,8 @@ func (a *Agent) HandleMessage(ctx context.Context, key SessionKey, text, userID,
 		SessionID:         sessionID,
 		DisallowedServers: r.DisallowedServers,
 		AllowedTools:      r.AllowedTools,
+		SessionKey:        string(key),
+		RunID:             mo.runID,
 	})
 	elapsed := time.Since(start)
 	if err != nil {

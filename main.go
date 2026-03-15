@@ -20,6 +20,8 @@ import (
 	"github.com/kvalv/kevinclaw/internal/slack"
 	"github.com/kvalv/kevinclaw/internal/util"
 	"github.com/kvalv/kevinclaw/migrations"
+	"github.com/kvalv/kevinclaw/web"
+	"net/http"
 )
 
 func main() {
@@ -75,15 +77,26 @@ func run(ctx context.Context) error {
 	}
 	defer mcpShutdown()
 
+	// Dashboard
+	dashboard := web.NewServer(pool)
+	go func() {
+		slog.Info("dashboard: starting", "addr", "http://localhost:4646/ui")
+		if err := http.ListenAndServe(":4646", dashboard.Handler()); err != nil {
+			slog.Error("dashboard: failed", "err", err)
+		}
+	}()
+
 	memoryDir := filepath.Join(projectRoot(), "memory")
+	systemPrompt := agent.BuildSystemPrompt(memoryDir, time.Now().Format(time.DateOnly))
 	a = agent.New(agent.Config{
-		IdleTimeout: 5 * time.Minute,
-		WorkDir:     projectRoot(),
-		SystemPrompt: func() string {
-			return agent.BuildSystemPrompt(memoryDir, time.Now().Format(time.DateOnly))
-		},
+		IdleTimeout:    5 * time.Minute,
+		WorkDir:        projectRoot(),
+		SystemPrompt:   func() string { return systemPrompt },
 		PermissionMode: "bypassPermissions",
 		MCPServers:     mcpServers,
+		OnEvent: func(ev agent.StreamEvent) {
+			dashboard.Broker().Publish(ev.RunID, ev.Line)
+		},
 	}).
 		WithSessionStore(d).
 		WithToolPolicy(agent.NewOwnerPolicy(env.OWNER_USER_ID, agent.PolicyPaths{
@@ -206,12 +219,6 @@ func setupMCPServers(ctx context.Context, env config.Env, cfg *config.Config, sc
 
 	if err := serve("slack", mcp.SlackServer(env.SLACK_BOT_TOKEN)); err != nil {
 		return nil, nil, err
-	}
-
-	// Chrome DevTools MCP — connects to Brave via CDP for browser automation
-	servers["browser"] = agent.MCPServer{
-		Command: "npx",
-		Args:    []string{"chrome-devtools-mcp", "--executablePath", "brave", "--headless"},
 	}
 
 	shutdown := func() {

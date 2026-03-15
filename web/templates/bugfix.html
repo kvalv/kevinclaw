@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Kevin — {{ .IssueID }}</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace; background: #0d1117; color: #c9d1d9; padding: 24px; }
+        h1 { color: #58a6ff; margin-bottom: 4px; font-size: 18px; }
+        .meta { color: #8b949e; margin-bottom: 24px; font-size: 13px; }
+        .meta a { color: #58a6ff; text-decoration: none; }
+        .status { padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+        .status-running { background: #1f6feb33; color: #58a6ff; }
+        .status-review { background: #8957e533; color: #bc8cff; }
+        .status-done { background: #23863633; color: #3fb950; }
+        .status-failed { background: #da363333; color: #f85149; }
+        .status-stuck { background: #9e6a0333; color: #d29922; }
+        .status-killed, .status-pending { background: #21262d; color: #8b949e; }
+        .back { color: #8b949e; text-decoration: none; font-size: 13px; }
+        .back:hover { color: #58a6ff; }
+        .stream { background: #161b22; border: 1px solid #21262d; border-radius: 6px; padding: 16px; font-size: 12px; font-family: monospace; min-height: 300px; max-height: calc(100vh - 200px); overflow-y: auto; }
+        .line { padding: 1px 0; white-space: pre-wrap; word-break: break-all; }
+        .line-system { color: #484f58; }
+        .line-assistant { color: #c9d1d9; }
+        .line-tool { color: #d2a8ff; }
+        .line-result { color: #3fb950; font-weight: 600; }
+        .line-error { color: #f85149; }
+        .connected { color: #3fb950; font-size: 11px; }
+        .disconnected { color: #f85149; font-size: 11px; }
+    </style>
+</head>
+<body>
+    <a class="back" href="/ui">&larr; dashboard</a>
+    <h1>{{ .IssueID }}: {{ .Title }}</h1>
+    <p class="meta">
+        <span class="status status-{{ .Status }}">{{ .Status }}</span>
+        {{ if .PRURL }}&middot; <a href="{{ .PRURL }}">PR</a>{{ end }}
+        &middot; run #{{ .ID }}
+        <span id="conn" class="connected">live</span>
+    </p>
+
+    <div class="stream" id="stream">
+    </div>
+
+    <script>
+        const stream = document.getElementById("stream");
+        const conn = document.getElementById("conn");
+
+        function classForLine(line) {
+            try {
+                const ev = JSON.parse(line);
+                if (ev.type === "system") return "line-system";
+                if (ev.type === "result") return ev.subtype === "error" ? "line-error" : "line-result";
+                if (ev.type === "assistant") return "line-assistant";
+            } catch(e) {}
+            return "line-tool";
+        }
+
+        function formatLine(line) {
+            try {
+                const ev = JSON.parse(line);
+                if (ev.type === "system" && ev.subtype === "init") {
+                    return "session " + (ev.session_id || "").slice(0,12) + " model=" + (ev.model || "?");
+                }
+                if (ev.type === "assistant" && ev.message) {
+                    const blocks = ev.message.content || [];
+                    return blocks.map(b => {
+                        if (b.type === "text") return b.text;
+                        if (b.type === "tool_use") return "tool: " + b.name;
+                        if (b.type === "tool_result") return "tool_result";
+                        return b.type;
+                    }).join(" | ");
+                }
+                if (ev.type === "result") {
+                    return "[" + ev.subtype + "] " + (ev.result || "").slice(0, 200) + " (" + (ev.num_turns||0) + " turns)";
+                }
+                return line.slice(0, 300);
+            } catch(e) {
+                return line.slice(0, 300);
+            }
+        }
+
+        function addLine(line) {
+            const div = document.createElement("div");
+            div.className = "line " + classForLine(line);
+            const ts = new Date().toLocaleTimeString();
+            div.textContent = ts + "  " + formatLine(line);
+            stream.appendChild(div);
+            stream.scrollTop = stream.scrollHeight;
+        }
+
+        const es = new EventSource("/ui/events/{{ .ID }}");
+        es.onmessage = function(e) { addLine(e.data); };
+        es.onerror = function() {
+            conn.textContent = "disconnected";
+            conn.className = "disconnected";
+        };
+    </script>
+</body>
+</html>
