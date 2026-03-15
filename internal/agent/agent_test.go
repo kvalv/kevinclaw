@@ -72,6 +72,41 @@ func TestHandleMessage_PolicyBlocksServers(t *testing.T) {
 	})
 }
 
+func TestHandleMessage_WithContext(t *testing.T) {
+	okResult := `{"type":"result","subtype":"success","result":"ok","session_id":"s1"}`
+
+	var gotPrompt string
+	capture := func(_ context.Context, prompt string, _ agent.RunOpts) ([]string, error) {
+		gotPrompt = prompt
+		return []string{okResult}, nil
+	}
+
+	a := agent.New(agent.Config{}).WithRunner(capture)
+
+	history := []agent.Message{
+		{UserID: "U_ALICE", Text: "the deploy failed", Timestamp: "2026-03-15T09:00:00Z"},
+		{UserID: "U_BOB", Text: "which service?", Timestamp: "2026-03-15T09:01:00Z"},
+	}
+
+	a.HandleMessage(t.Context(), "k1", "fix it", "U_ALICE", "C123", agent.WithHistory(history))
+
+	if !strings.Contains(gotPrompt, "the deploy failed") {
+		t.Errorf("expected context in prompt, got: %q", gotPrompt)
+	}
+	if !strings.Contains(gotPrompt, "which service?") {
+		t.Errorf("expected context in prompt, got: %q", gotPrompt)
+	}
+	if !strings.Contains(gotPrompt, "fix it") {
+		t.Errorf("expected actual message in prompt, got: %q", gotPrompt)
+	}
+	// Context should come before the actual message
+	deployIdx := strings.Index(gotPrompt, "the deploy failed")
+	fixIdx := strings.Index(gotPrompt, "fix it")
+	if deployIdx > fixIdx {
+		t.Errorf("context should come before message, deploy at %d, fix at %d", deployIdx, fixIdx)
+	}
+}
+
 func TestHandleMessage_SimpleQuestion(t *testing.T) {
 	a := agent.New(agent.Config{
 		IdleTimeout: 30 * time.Second,

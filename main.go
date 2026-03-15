@@ -56,27 +56,8 @@ func run(ctx context.Context) error {
 
 	d := postgres.New(pool)
 
-	mcpServers, mcpShutdown, err := setupMCPServers(ctx, env, cfg)
-	if err != nil {
-		return fmt.Errorf("mcp: %w", err)
-	}
-	defer mcpShutdown()
-
-	a := agent.New(agent.Config{
-		IdleTimeout:    5 * time.Minute,
-		WorkDir:        projectRoot(),
-		SystemPrompt:   kevinPrompt,
-		PermissionMode: "bypassPermissions",
-		MCPServers:     mcpServers,
-	}).
-		WithSessionStore(d).
-		WithToolPolicy(agent.NewOwnerPolicy(env.OWNER_USER_ID, agent.PolicyPaths{
-			Write:  cfg.Paths.Write,
-			Read:   cfg.Paths.Read,
-			Public: cfg.Paths.Public,
-		}))
-
-	sc := slack.New(env.SLACK_BOT_TOKEN, env.SLACK_APP_TOKEN)
+	// Agent is referenced by the cron handler, so we use a pointer that's set after creation.
+	var a *agent.Agent
 
 	sched, err := cron.New(ctx, pool, func(ctx context.Context, sessionKey, prompt string) error {
 		reply, err := a.HandleMessage(ctx, agent.SessionKey(sessionKey), prompt, env.OWNER_USER_ID, "")
@@ -92,6 +73,28 @@ func run(ctx context.Context) error {
 	}
 	defer sched.Stop(ctx)
 
+	mcpServers, mcpShutdown, err := setupMCPServers(ctx, env, cfg, sched)
+	if err != nil {
+		return fmt.Errorf("mcp: %w", err)
+	}
+	defer mcpShutdown()
+
+	a = agent.New(agent.Config{
+		IdleTimeout:    5 * time.Minute,
+		WorkDir:        projectRoot(),
+		SystemPrompt:   kevinPrompt,
+		PermissionMode: "bypassPermissions",
+		MCPServers:     mcpServers,
+	}).
+		WithSessionStore(d).
+		WithToolPolicy(agent.NewOwnerPolicy(env.OWNER_USER_ID, agent.PolicyPaths{
+			Write:  cfg.Paths.Write,
+			Read:   cfg.Paths.Read,
+			Public: cfg.Paths.Public,
+		}))
+
+	sc := slack.New(env.SLACK_BOT_TOKEN, env.SLACK_APP_TOKEN)
+
 	logStartupInfo(a)
 	return sc.Listen(ctx, func(ev slack.Event) {
 		go func() {
@@ -103,8 +106,14 @@ func run(ctx context.Context) error {
 				slog.Warn("eyes reaction failed", "err", err)
 			}
 
+			// Fetch recent messages for context
+			history, err := d.RecentMessages(ctx, ev.Channel, ev.ThreadTS, 30)
+			if err != nil {
+				slog.Warn("failed to fetch history", "err", err)
+			}
+
 			key := agent.SessionKey(ev.Channel + ":" + ev.ThreadTS)
-			reply, err := a.HandleMessage(ctx, key, ev.Text, ev.UserID, ev.Channel)
+			reply, err := a.HandleMessage(ctx, key, ev.Text, ev.UserID, ev.Channel, agent.WithHistory(history))
 
 			if rmErr := sc.RemoveReaction(ctx, ev.Channel, ev.MessageTS, "eyes"); rmErr != nil {
 				slog.Warn("remove eyes reaction failed", "err", rmErr)
@@ -126,7 +135,7 @@ func run(ctx context.Context) error {
 	})
 }
 
-func setupMCPServers(ctx context.Context, env config.Env, cfg *config.Config) (map[string]agent.MCPServer, func(), error) {
+func setupMCPServers(ctx context.Context, env config.Env, cfg *config.Config, sched *cron.Scheduler) (map[string]agent.MCPServer, func(), error) {
 	servers := make(map[string]agent.MCPServer)
 	var shutdowns []func()
 
@@ -141,6 +150,10 @@ func setupMCPServers(ctx context.Context, env config.Env, cfg *config.Config) (m
 	}
 
 	if err := serve("debug", mcp.DebugServer()); err != nil {
+		return nil, nil, err
+	}
+
+	if err := serve("cron", mcp.CronServer(sched)); err != nil {
 		return nil, nil, err
 	}
 

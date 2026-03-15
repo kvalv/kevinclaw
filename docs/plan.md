@@ -85,3 +85,75 @@ User then picks which entities to keep and adds descriptions.
 3. Wire into main.go (if ha.toml exists)
 4. `scripts/ha-export.sh`
 5. Block for non-owner in policy
+
+---
+
+# Memory, Preferences & Chat History
+
+## How nanoclaw does it
+
+### Message context
+
+- Stores all messages in SQLite
+- On trigger, retrieves up to 200 messages since last agent timestamp
+- Formats as XML: `<message sender="Alice" time="3:45 PM">text</message>`
+- Includes timezone context and thread_ts for Slack threads
+- This XML is the prompt sent to the agent
+
+### Session memory (Claude auto-memory)
+
+- `CLAUDE_CODE_DISABLE_AUTO_MEMORY=0` — auto-memory is ON
+- Each group has its own `.claude/` directory
+- Claude SDK manages memory files automatically in that directory
+- Sessions resume via `--resume <session_id>` with full conversation context
+
+### Conversation archival
+
+- Before session compaction (context too large), a `PreCompactHook` archives the transcript
+- Saved to `conversations/{date}-{summary}.md` in the group workspace
+- These are searchable by the agent in future sessions
+
+### Global vs per-group
+
+- `groups/global/CLAUDE.md` — shared personality, rules (read-only for non-main)
+- `groups/{name}/` — per-group writable workspace, conversations, logs
+- `data/sessions/{name}/.claude/` — per-group Claude sessions and auto-memory
+
+## What kevinclaw has today
+
+- Session IDs persisted in Postgres (survive restarts) ✓
+- `--resume` for multi-turn continuity ✓
+- All messages stored in Postgres ✓
+- KEVIN.md as system prompt ✓
+- Claude auto-memory is ON by default (we don't disable it) ✓
+
+## What's missing
+
+### 1. Chat history as context
+
+Currently Kevin only sees the single message that triggered him. He doesn't see the last N messages in the channel/thread. This means if someone says "hey" then "can you check X", Kevin only sees "can you check X" with no context.
+
+Options:
+
+- Query Postgres for recent messages in the same channel/thread
+- Format as XML (like nanoclaw) or plain text
+- Prepend to the prompt before sending to Claude
+
+### 2. Conversation archival
+
+No archival before compaction. Long sessions will lose history when Claude compacts.
+
+Options:
+
+- Set `--append-system-prompt` with recent messages as context
+- Or use Claude's built-in auto-memory (already enabled)
+- Or add a conversations/ folder per session key
+
+### 3. Preferences persistence
+
+No explicit preferences file. Kevin's auto-memory handles some of this, but it's tied to the Claude session directory (~/.claude/).
+
+Options:
+
+- Let auto-memory handle it (simplest, already works)
+- Add a `preferences.md` in the workdir that Kevin can read/write

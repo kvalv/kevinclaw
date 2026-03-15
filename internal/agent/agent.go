@@ -1,11 +1,13 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sync"
+	"text/template"
 	"time"
 )
 
@@ -91,9 +93,35 @@ func (a *Agent) WithToolPolicy(p ToolPolicy) *Agent {
 	return a
 }
 
+// Message is a recent message to include as context.
+type Message struct {
+	UserID    string
+	Text      string
+	Timestamp string
+}
+
+// MessageOption configures a HandleMessage call.
+type MessageOption func(*messageOpts)
+
+type messageOpts struct {
+	history []Message
+}
+
+// WithHistory prepends recent messages as context.
+func WithHistory(msgs []Message) MessageOption {
+	return func(o *messageOpts) { o.history = msgs }
+}
+
 // HandleMessage sends a prompt to claude and returns the text response.
 // userID and channel are used by the policy to determine tool restrictions.
-func (a *Agent) HandleMessage(ctx context.Context, key SessionKey, text, userID, channel string) (string, error) {
+func (a *Agent) HandleMessage(ctx context.Context, key SessionKey, text, userID, channel string, opts ...MessageOption) (string, error) {
+	var mo messageOpts
+	for _, o := range opts {
+		o(&mo)
+	}
+
+	prompt := formatPrompt(text, mo.history)
+
 	sessionID, _ := a.sessions.GetSession(ctx, string(key))
 
 	var r Restrictions
@@ -105,13 +133,14 @@ func (a *Agent) HandleMessage(ctx context.Context, key SessionKey, text, userID,
 		"session_key", key,
 		"session_id", sessionID,
 		"resuming", sessionID != "",
-		"prompt_len", len(text),
+		"prompt_len", len(prompt),
+		"history_msgs", len(mo.history),
 		"blocked_servers", r.DisallowedServers,
 		"restricted_tools", r.AllowedTools != nil,
 	)
 
 	start := time.Now()
-	lines, err := a.runner(ctx, text, RunOpts{
+	lines, err := a.runner(ctx, prompt, RunOpts{
 		SessionID:         sessionID,
 		DisallowedServers: r.DisallowedServers,
 		AllowedTools:      r.AllowedTools,
@@ -142,6 +171,33 @@ func (a *Agent) HandleMessage(ctx context.Context, key SessionKey, text, userID,
 	)
 
 	return result, nil
+}
+
+var promptTmpl = template.Must(template.New("prompt").Funcs(template.FuncMap{
+	"fmtTime": func(ts string) string {
+		if t, err := time.Parse(time.RFC3339, ts); err == nil {
+			return t.Format("15:04")
+		}
+		return ts
+	},
+}).Parse(`{{- if .History -}}
+Recent messages:
+{{ range .History -}}
+[{{ .UserID }} {{ fmtTime .Timestamp }}] {{ .Text }}
+{{ end }}
+{{ end -}}
+{{ .Text }}`))
+
+func formatPrompt(text string, history []Message) string {
+	if len(history) == 0 {
+		return text
+	}
+	var buf bytes.Buffer
+	promptTmpl.Execute(&buf, struct {
+		Text    string
+		History []Message
+	}{Text: text, History: history})
+	return buf.String()
 }
 
 func parseResponse(lines []string) (result string, sessionID string, err error) {

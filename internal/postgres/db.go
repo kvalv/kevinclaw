@@ -3,8 +3,10 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/kvalv/kevinclaw/internal/agent"
 )
 
 type DB struct {
@@ -41,6 +43,52 @@ func (d *DB) GetSession(ctx context.Context, sessionKey string) (string, error) 
 		return "", fmt.Errorf("getting session: %w", err)
 	}
 	return id, nil
+}
+
+// RecentMessages returns recent messages for a channel/thread, ordered oldest first.
+// For threads (threadTS non-empty): returns all messages in that thread.
+// For channels (threadTS empty): returns the last `limit` top-level messages.
+func (d *DB) RecentMessages(ctx context.Context, channel, threadTS string, limit int) ([]agent.Message, error) {
+	var query string
+	var args []any
+
+	if threadTS != "" {
+		query = `SELECT user_id, text, created_at FROM messages
+			WHERE channel = $1 AND thread_ts = $2
+			ORDER BY created_at ASC`
+		args = []any{channel, threadTS}
+	} else {
+		query = `SELECT user_id, text, created_at FROM messages
+			WHERE channel = $1 AND thread_ts IS NULL
+			ORDER BY created_at DESC LIMIT $2`
+		args = []any{channel, limit}
+	}
+
+	rows, err := d.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying messages: %w", err)
+	}
+	defer rows.Close()
+
+	var msgs []agent.Message
+	for rows.Next() {
+		var m agent.Message
+		var ts time.Time
+		if err := rows.Scan(&m.UserID, &m.Text, &ts); err != nil {
+			return nil, fmt.Errorf("scanning message: %w", err)
+		}
+		m.Timestamp = ts.Format(time.RFC3339)
+		msgs = append(msgs, m)
+	}
+
+	// For channel queries we got DESC order, reverse to oldest-first
+	if threadTS == "" {
+		for i, j := 0, len(msgs)-1; i < j; i, j = i+1, j-1 {
+			msgs[i], msgs[j] = msgs[j], msgs[i]
+		}
+	}
+
+	return msgs, nil
 }
 
 // SaveSession upserts the claude session ID for a given key.
