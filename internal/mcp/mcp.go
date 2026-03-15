@@ -13,6 +13,9 @@ type Server = sdkmcp.Server
 // CallToolResult wraps the MCP SDK result.
 type CallToolResult = sdkmcp.CallToolResult
 
+// TextContent wraps the MCP SDK text content type.
+type TextContent = sdkmcp.TextContent
+
 // TestClient connects to a Server via in-memory transport for testing.
 // Returns a function to call tools and a cleanup function.
 func TestClient(ctx context.Context, server *Server) (callTool func(ctx context.Context, name string, args map[string]any) (*CallToolResult, error), cleanup func(), err error) {

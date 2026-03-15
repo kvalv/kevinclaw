@@ -16,7 +16,7 @@ type Config struct {
 	IdleTimeout    time.Duration
 	WorkDir        string
 	SystemPrompt   string
-	MCPConfigPath  string
+	MCPServers     map[string]string // name -> URL (streamable HTTP)
 	AllowedPaths   []string
 	PermissionMode string // e.g. "bypassPermissions"
 }

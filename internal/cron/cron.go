@@ -2,6 +2,7 @@ package cron
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 
@@ -47,6 +48,48 @@ func (s *Scheduler) Schedule(ctx context.Context, args PromptJobArgs) error {
 		return fmt.Errorf("scheduling job: %w", err)
 	}
 	slog.Info("cron: job scheduled", "session_key", args.SessionKey, "prompt_len", len(args.Prompt))
+	return nil
+}
+
+// JobInfo is a summary of a scheduled job.
+type JobInfo struct {
+	ID         int64  `json:"id"`
+	State      string `json:"state"`
+	SessionKey string `json:"session_key"`
+	Prompt     string `json:"prompt"`
+}
+
+// List returns pending/scheduled/running jobs.
+func (s *Scheduler) List(ctx context.Context) ([]JobInfo, error) {
+	params := river.NewJobListParams().First(50)
+	result, err := s.client.JobList(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("listing jobs: %w", err)
+	}
+
+	var jobs []JobInfo
+	for _, row := range result.Jobs {
+		var args PromptJobArgs
+		if err := json.Unmarshal(row.EncodedArgs, &args); err != nil {
+			continue
+		}
+		jobs = append(jobs, JobInfo{
+			ID:         row.ID,
+			State:      string(row.State),
+			SessionKey: args.SessionKey,
+			Prompt:     args.Prompt,
+		})
+	}
+	return jobs, nil
+}
+
+// Cancel cancels a job by ID.
+func (s *Scheduler) Cancel(ctx context.Context, jobID int64) error {
+	_, err := s.client.JobCancel(ctx, jobID)
+	if err != nil {
+		return fmt.Errorf("cancelling job %d: %w", jobID, err)
+	}
+	slog.Info("cron: job cancelled", "job_id", jobID)
 	return nil
 }
 

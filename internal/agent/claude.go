@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -28,6 +29,31 @@ type contentBlock struct {
 	Text string `json:"text,omitempty"`
 }
 
+// buildMCPConfig creates an mcp-config JSON string for streamable HTTP servers.
+func buildMCPConfig(servers map[string]string) string {
+	type mcpServer struct {
+		Type string `json:"type"`
+		URL  string `json:"url"`
+	}
+	cfg := struct {
+		MCPServers map[string]mcpServer `json:"mcpServers"`
+	}{
+		MCPServers: make(map[string]mcpServer, len(servers)),
+	}
+	for name, url := range servers {
+		cfg.MCPServers[name] = mcpServer{Type: "http", URL: url}
+	}
+	// Write to temp file — claude CLI expects a file path or JSON string
+	f, err := os.CreateTemp("", "kevinclaw-mcp-*.json")
+	if err != nil {
+		slog.Error("claude: failed to create mcp config", "err", err)
+		return ""
+	}
+	json.NewEncoder(f).Encode(cfg)
+	f.Close()
+	return f.Name()
+}
+
 // ClaudeRunner returns a Runner that spawns the claude CLI as a subprocess.
 func ClaudeRunner(cfg Config) Runner {
 	return func(ctx context.Context, prompt string, sessionID string) ([]string, error) {
@@ -45,8 +71,9 @@ func ClaudeRunner(cfg Config) Runner {
 			args = append(args, "--system-prompt", cfg.SystemPrompt)
 		}
 
-		if cfg.MCPConfigPath != "" {
-			args = append(args, "--mcp-config", cfg.MCPConfigPath)
+		if len(cfg.MCPServers) > 0 {
+			mcpConfig := buildMCPConfig(cfg.MCPServers)
+			args = append(args, "--mcp-config", mcpConfig)
 		}
 
 		if len(cfg.AllowedPaths) > 0 {

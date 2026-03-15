@@ -15,6 +15,7 @@ import (
 	"github.com/kvalv/kevinclaw/internal/agent"
 	"github.com/kvalv/kevinclaw/internal/cron"
 	"github.com/kvalv/kevinclaw/internal/environment"
+	"github.com/kvalv/kevinclaw/internal/mcp"
 	"github.com/kvalv/kevinclaw/internal/postgres"
 	"github.com/kvalv/kevinclaw/internal/slack"
 	"github.com/kvalv/kevinclaw/migrations"
@@ -49,11 +50,21 @@ func run(ctx context.Context) error {
 
 	d := postgres.New(pool)
 
+	// Start debug MCP server
+	debugAddr, debugShutdown, err := mcp.ServeHTTP(ctx, mcp.DebugServer(), "localhost:0")
+	if err != nil {
+		return fmt.Errorf("debug mcp: %w", err)
+	}
+	defer debugShutdown()
+
 	a := agent.New(agent.Config{
 		IdleTimeout:    5 * time.Minute,
 		WorkDir:        projectRoot(),
 		SystemPrompt:   kevinPrompt,
 		PermissionMode: "bypassPermissions",
+		MCPServers: map[string]string{
+			"debug": debugAddr,
+		},
 	}).WithSessionStore(d)
 
 	sc := slack.New(env.SLACK_BOT_TOKEN, env.SLACK_APP_TOKEN)
