@@ -44,7 +44,11 @@ func TestHandleMessage_PolicyBlocksServers(t *testing.T) {
 		return []string{okResult}, nil
 	}
 
-	a := agent.New(agent.Config{}).WithRunner(captureOpts).WithPolicy(agent.NewOwnerPolicy("owner"))
+	a := agent.New(agent.Config{}).WithRunner(captureOpts).WithToolPolicy(agent.NewOwnerPolicy("owner", agent.PolicyPaths{
+		Read:   []string{"~/src"},
+		Write:  []string{"~/src"},
+		Public: []string{"~/src/docs"},
+	}))
 
 	t.Run("non-owner gets restricted", func(t *testing.T) {
 		a.HandleMessage(t.Context(), "k1", "hi", "stranger", "C123")
@@ -56,13 +60,14 @@ func TestHandleMessage_PolicyBlocksServers(t *testing.T) {
 		}
 	})
 
-	t.Run("owner gets everything", func(t *testing.T) {
+	t.Run("owner gets scoped but not blocked", func(t *testing.T) {
 		a.HandleMessage(t.Context(), "k2", "hi", "owner", "C123")
 		if len(gotOpts.DisallowedServers) != 0 {
 			t.Fatalf("expected 0 blocked servers, got %v", gotOpts.DisallowedServers)
 		}
-		if gotOpts.AllowedTools != nil {
-			t.Fatalf("expected nil allowed tools, got %v", gotOpts.AllowedTools)
+		// Owner has scoped tools (not nil) but includes Bash, Skill, etc.
+		if gotOpts.AllowedTools == nil {
+			t.Fatal("expected scoped tools for owner")
 		}
 	})
 }

@@ -22,7 +22,6 @@ type Config struct {
 	WorkDir        string
 	SystemPrompt   string
 	MCPServers     map[string]MCPServer
-	AllowedPaths   []string
 	PermissionMode string // e.g. "bypassPermissions"
 }
 
@@ -87,7 +86,7 @@ func (a *Agent) WithSessionStore(s SessionStore) *Agent {
 	return a
 }
 
-func (a *Agent) WithPolicy(p ToolPolicy) *Agent {
+func (a *Agent) WithToolPolicy(p ToolPolicy) *Agent {
 	a.policy = p
 	return a
 }

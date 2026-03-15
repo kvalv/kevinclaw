@@ -58,6 +58,21 @@ func buildMCPConfig(servers map[string]MCPServer) string {
 	return f.Name()
 }
 
+// expandToolPath expands ~ and env vars inside tool path patterns like "Read(~/src/**)".
+func expandToolPath(tool string) string {
+	// Tools like "Read(~/src/**)" or just "Bash"
+	if i := strings.Index(tool, "("); i != -1 {
+		prefix := tool[:i+1]
+		rest := tool[i+1:]
+		if j := strings.Index(rest, ")"); j != -1 {
+			path := rest[:j]
+			suffix := rest[j:]
+			return prefix + expandPath(path) + suffix
+		}
+	}
+	return tool
+}
+
 // expandPath expands ~ and environment variables in a path.
 func expandPath(p string) string {
 	if strings.HasPrefix(p, "~/") {
@@ -91,22 +106,12 @@ func ClaudeRunner(cfg Config) Runner {
 		}
 
 		if len(opts.AllowedTools) > 0 {
-			// Per-invocation override (e.g. restricted user)
-			args = append(args, "--allowedTools", strings.Join(opts.AllowedTools, " "))
-		} else if len(cfg.AllowedPaths) > 0 {
-			// Default: owner gets full access with path-scoped Edit/Write
-			var tools []string
-			for _, p := range cfg.AllowedPaths {
-				p = expandPath(p)
-				tools = append(tools, fmt.Sprintf("Edit(%s/**)", p))
-				tools = append(tools, fmt.Sprintf("Write(%s/**)", p))
+			// Expand ~ and env vars in tool path patterns
+			var expanded []string
+			for _, t := range opts.AllowedTools {
+				expanded = append(expanded, expandToolPath(t))
 			}
-			tools = append(tools, "Bash", "Read", "Glob", "Grep", "WebSearch", "WebFetch")
-			args = append(args, "--allowedTools", strings.Join(tools, " "))
-
-			for _, p := range cfg.AllowedPaths {
-				args = append(args, "--add-dir", expandPath(p))
-			}
+			args = append(args, "--allowedTools", strings.Join(expanded, " "))
 		}
 
 		if cfg.PermissionMode != "" {

@@ -1,0 +1,20 @@
+paths:
+  write:
+    - ~/src/myproject
+  read:
+    - ~/src/myproject
+    - ~/scripts
+  public:
+    - ~/src/myproject/docs
+
+homeassistant:
+  entities:
+    - id: light.living_room
+      name: living_room_lights
+      category: light
+      description: Living room ceiling lights
+
+    - id: sensor.temperature
+      name: room_temp
+      category: sensor
+      description: Room temperature (celsius)

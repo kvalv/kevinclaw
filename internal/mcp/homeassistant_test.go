@@ -4,6 +4,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/kvalv/kevinclaw/internal/config"
 	mcp "github.com/kvalv/kevinclaw/internal/mcp"
 	"github.com/kvalv/kevinclaw/internal/testutil"
 )
@@ -17,10 +18,8 @@ func TestHA_TurnOffLight(t *testing.T) {
 	server := testutil.HTTPVCR(t, haURL)
 	defer server.Close()
 
-	cfg := &mcp.HAConfig{
-		Entities: []mcp.HAEntity{
-			{ID: "light.lys_over_spisebord", Name: "dining_table_light", Category: "light", Description: "Dining table light"},
-		},
+	entities := []config.HAEntity{
+		{ID: "light.lys_over_spisebord", Name: "dining_table_light", Category: "light", Description: "Dining table light"},
 	}
 
 	token := os.Getenv("HOMEASSISTANT_API_TOKEN")
@@ -28,7 +27,7 @@ func TestHA_TurnOffLight(t *testing.T) {
 		token = "fake-token"
 	}
 
-	callTool, cleanup, err := mcp.TestClient(t.Context(), mcp.HomeAssistantServer(cfg, server.URL, token))
+	callTool, cleanup, err := mcp.TestClient(t.Context(), mcp.HomeAssistantServer(entities, server.URL, token))
 	if err != nil {
 		t.Fatalf("TestClient: %v", err)
 	}

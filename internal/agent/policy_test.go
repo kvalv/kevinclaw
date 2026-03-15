@@ -8,36 +8,53 @@ import (
 )
 
 func TestOwnerPolicy(t *testing.T) {
-	policy := agent.NewOwnerPolicy("U_OWNER")
+	policy := agent.NewOwnerPolicy("U_OWNER", agent.PolicyPaths{
+		Read:   []string{"~/src/main/a", "~/scripts"},
+		Write:  []string{"~/src/main/a"},
+		Public: []string{"~/src/main/a/docs"},
+	})
 
-	t.Run("owner gets no restrictions", func(t *testing.T) {
+	t.Run("owner gets scoped access", func(t *testing.T) {
 		r := policy("U_OWNER", "C_ANY")
 		if len(r.DisallowedServers) != 0 {
 			t.Errorf("expected no blocked servers, got %v", r.DisallowedServers)
 		}
-		if r.AllowedTools != nil {
-			t.Errorf("expected nil allowed tools, got %v", r.AllowedTools)
+		if r.AllowedTools == nil {
+			t.Fatal("expected scoped tools for owner")
+		}
+		// Should have Edit/Write for write paths
+		if !slices.ContainsFunc(r.AllowedTools, func(s string) bool { return s == "Edit(~/src/main/a/**)" }) {
+			t.Errorf("expected Edit for write path, got %v", r.AllowedTools)
+		}
+		// Should have Read for read paths
+		if !slices.ContainsFunc(r.AllowedTools, func(s string) bool { return s == "Read(~/scripts/**)" }) {
+			t.Errorf("expected Read for read path, got %v", r.AllowedTools)
+		}
+		// Should have Bash, Skill
+		if !slices.Contains(r.AllowedTools, "Bash") {
+			t.Error("expected Bash for owner")
+		}
+		if !slices.Contains(r.AllowedTools, "Skill") {
+			t.Error("expected Skill for owner")
 		}
 	})
 
-	t.Run("owner unrestricted in any channel", func(t *testing.T) {
-		for _, ch := range []string{"C_PUBLIC", "C_PRIVATE", "D_DM", ""} {
-			r := policy("U_OWNER", ch)
-			if len(r.DisallowedServers) != 0 || r.AllowedTools != nil {
-				t.Errorf("channel %q: expected no restrictions, got servers=%v tools=%v", ch, r.DisallowedServers, r.AllowedTools)
-			}
-		}
-	})
-
-	t.Run("non-owner gets restricted tools", func(t *testing.T) {
+	t.Run("non-owner gets public path access only", func(t *testing.T) {
 		r := policy("U_OTHER", "C_PUBLIC")
 		if r.AllowedTools == nil {
 			t.Fatal("expected allowed tools to be set")
 		}
-		for _, tool := range agent.ReadOnlyTools {
-			if !slices.Contains(r.AllowedTools, tool) {
-				t.Errorf("expected %q in allowed tools", tool)
-			}
+		// Should have scoped Read for public paths
+		if !slices.ContainsFunc(r.AllowedTools, func(s string) bool { return s == "Read(~/src/main/a/docs/**)" }) {
+			t.Errorf("expected scoped Read for public path, got %v", r.AllowedTools)
+		}
+		// Should have WebSearch
+		if !slices.Contains(r.AllowedTools, "WebSearch") {
+			t.Error("expected WebSearch")
+		}
+		// Should NOT have unscoped Read
+		if slices.Contains(r.AllowedTools, "Read") {
+			t.Error("should not have unscoped Read")
 		}
 	})
 

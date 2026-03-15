@@ -10,17 +10,17 @@ import (
 	goslack "github.com/slack-go/slack"
 
 	"github.com/kvalv/kevinclaw/internal/agent"
-	"github.com/kvalv/kevinclaw/internal/environment"
+	"github.com/kvalv/kevinclaw/internal/config"
 	"github.com/kvalv/kevinclaw/internal/slack"
 	"github.com/kvalv/kevinclaw/internal/testutil"
 )
 
-func setupClient(t *testing.T) (*slack.Client, environment.Environment) {
+func setupClient(t *testing.T) (*slack.Client, config.Env) {
 	t.Helper()
 	if os.Getenv("SLACK_INTEGRATION") == "" {
 		t.Skip("set SLACK_INTEGRATION=1 to run")
 	}
-	env, err := environment.New()
+	env, err := config.LoadEnv()
 	if err != nil {
 		t.Fatalf("loading environment: %v", err)
 	}

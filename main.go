@@ -13,8 +13,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/kvalv/kevinclaw/internal/agent"
+	"github.com/kvalv/kevinclaw/internal/config"
 	"github.com/kvalv/kevinclaw/internal/cron"
-	"github.com/kvalv/kevinclaw/internal/environment"
 	"github.com/kvalv/kevinclaw/internal/gcal"
 	"github.com/kvalv/kevinclaw/internal/mcp"
 	"github.com/kvalv/kevinclaw/internal/postgres"
@@ -38,9 +38,14 @@ func main() {
 }
 
 func run(ctx context.Context) error {
-	env, err := environment.New()
+	env, err := config.LoadEnv()
 	if err != nil {
 		return fmt.Errorf("loading environment: %w", err)
+	}
+
+	cfg, err := config.Load(filepath.Join(projectRoot(), "kevin.yaml"))
+	if err != nil {
+		return fmt.Errorf("loading kevin.yaml: %w", err)
 	}
 
 	pool, err := setupDB(ctx, env.DATABASE_URL)
@@ -51,41 +56,11 @@ func run(ctx context.Context) error {
 
 	d := postgres.New(pool)
 
-	// Start MCP servers
-	mcpServers := make(map[string]agent.MCPServer)
-
-	debugAddr, debugShutdown, err := mcp.ServeHTTP(ctx, mcp.DebugServer(), "localhost:0")
+	mcpServers, mcpShutdown, err := setupMCPServers(ctx, env, cfg)
 	if err != nil {
-		return fmt.Errorf("debug mcp: %w", err)
+		return fmt.Errorf("mcp: %w", err)
 	}
-	defer debugShutdown()
-	mcpServers["debug"] = agent.MCPServer{URL: debugAddr}
-
-	if env.GOOGLE_REFRESH_TOKEN != "" {
-		gcalClient := gcal.New(env.GOOGLE_CLIENT_ID, env.GOOGLE_CLIENT_SECRET, env.GOOGLE_REFRESH_TOKEN)
-		gcalAddr, gcalShutdown, err := mcp.ServeHTTP(ctx, mcp.GCalServer(gcalClient), "localhost:0")
-		if err != nil {
-			return fmt.Errorf("gcal mcp: %w", err)
-		}
-		defer gcalShutdown()
-		mcpServers["gcal"] = agent.MCPServer{URL: gcalAddr}
-	}
-
-	if haCfg := mcp.TryLoadHAConfig(filepath.Join(projectRoot(), "ha.toml")); haCfg != nil && env.HOMEASSISTANT_API_URL != "" {
-		haAddr, haShutdown, err := mcp.ServeHTTP(ctx, mcp.HomeAssistantServer(haCfg, env.HOMEASSISTANT_API_URL, env.HOMEASSISTANT_API_TOKEN), "localhost:0")
-		if err != nil {
-			return fmt.Errorf("ha mcp: %w", err)
-		}
-		defer haShutdown()
-		mcpServers["homeassistant"] = agent.MCPServer{URL: haAddr}
-	}
-
-	if env.LINEAR_API_KEY != "" {
-		mcpServers["linear"] = agent.MCPServer{
-			URL:     "https://mcp.linear.app/mcp",
-			Headers: map[string]string{"Authorization": "Bearer " + env.LINEAR_API_KEY},
-		}
-	}
+	defer mcpShutdown()
 
 	a := agent.New(agent.Config{
 		IdleTimeout:    5 * time.Minute,
@@ -93,8 +68,13 @@ func run(ctx context.Context) error {
 		SystemPrompt:   kevinPrompt,
 		PermissionMode: "bypassPermissions",
 		MCPServers:     mcpServers,
-		AllowedPaths:   []string{"~/src/main/a"},
-	}).WithSessionStore(d).WithPolicy(agent.NewOwnerPolicy(env.OWNER_USER_ID))
+	}).
+		WithSessionStore(d).
+		WithToolPolicy(agent.NewOwnerPolicy(env.OWNER_USER_ID, agent.PolicyPaths{
+			Write:  cfg.Paths.Write,
+			Read:   cfg.Paths.Read,
+			Public: cfg.Paths.Public,
+		}))
 
 	sc := slack.New(env.SLACK_BOT_TOKEN, env.SLACK_APP_TOKEN)
 
@@ -103,7 +83,6 @@ func run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		// TODO: resolve sessionKey back to channel + threadTS for sending
 		slog.Info("cron: job completed", "session_key", sessionKey, "reply_len", len(reply))
 		_ = reply
 		return nil
@@ -147,6 +126,51 @@ func run(ctx context.Context) error {
 	})
 }
 
+func setupMCPServers(ctx context.Context, env config.Env, cfg *config.Config) (map[string]agent.MCPServer, func(), error) {
+	servers := make(map[string]agent.MCPServer)
+	var shutdowns []func()
+
+	serve := func(name string, s *mcp.Server) error {
+		addr, shutdown, err := mcp.ServeHTTP(ctx, s, "localhost:0")
+		if err != nil {
+			return fmt.Errorf("%s: %w", name, err)
+		}
+		shutdowns = append(shutdowns, shutdown)
+		servers[name] = agent.MCPServer{URL: addr}
+		return nil
+	}
+
+	if err := serve("debug", mcp.DebugServer()); err != nil {
+		return nil, nil, err
+	}
+
+	if env.GOOGLE_REFRESH_TOKEN != "" {
+		if err := serve("gcal", mcp.GCalServer(gcal.New(env.GOOGLE_CLIENT_ID, env.GOOGLE_CLIENT_SECRET, env.GOOGLE_REFRESH_TOKEN))); err != nil {
+			return nil, nil, err
+		}
+	}
+
+	if len(cfg.HomeAssistant.Entities) > 0 && env.HOMEASSISTANT_API_URL != "" {
+		if err := serve("homeassistant", mcp.HomeAssistantServer(cfg.HomeAssistant.Entities, env.HOMEASSISTANT_API_URL, env.HOMEASSISTANT_API_TOKEN)); err != nil {
+			return nil, nil, err
+		}
+	}
+
+	if env.LINEAR_API_KEY != "" {
+		servers["linear"] = agent.MCPServer{
+			URL:     "https://mcp.linear.app/mcp",
+			Headers: map[string]string{"Authorization": "Bearer " + env.LINEAR_API_KEY},
+		}
+	}
+
+	shutdown := func() {
+		for _, fn := range shutdowns {
+			fn()
+		}
+	}
+	return servers, shutdown, nil
+}
+
 func setupDB(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
@@ -169,7 +193,6 @@ func setupDB(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 func logStartupInfo(a *agent.Agent) {
 	cfg := a.Config()
 
-	// Discover skills
 	var skills []string
 	skillsDir := filepath.Join(cfg.WorkDir, ".claude", "skills")
 	if entries, err := os.ReadDir(skillsDir); err == nil {
@@ -180,7 +203,6 @@ func logStartupInfo(a *agent.Agent) {
 		}
 	}
 
-	// MCP servers
 	var mcpNames []string
 	for name := range cfg.MCPServers {
 		mcpNames = append(mcpNames, name)

@@ -7,25 +7,11 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"strings"
 
-	"github.com/BurntSushi/toml"
+	"github.com/kvalv/kevinclaw/internal/config"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
-
-// HAConfig is the top-level ha.toml structure.
-type HAConfig struct {
-	Entities []HAEntity `toml:"entities"`
-}
-
-// HAEntity defines a single exposed HA entity.
-type HAEntity struct {
-	ID          string `toml:"id"`
-	Name        string `toml:"name"`
-	Category    string `toml:"category"` // vacuum, light, sensor, cover
-	Description string `toml:"description"`
-}
 
 // categoryActions maps category to allowed actions.
 var categoryActions = map[string][]string{
@@ -108,19 +94,19 @@ func serviceMap(category, action string) (string, string, error) {
 }
 
 // HomeAssistantServer creates an MCP server with Home Assistant tools based on config.
-func HomeAssistantServer(cfg *HAConfig, apiURL, apiToken string) *Server {
+func HomeAssistantServer(cfgEntities []config.HAEntity, apiURL, apiToken string) *Server {
 	s := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "kevinclaw-ha", Version: "v0.0.1"}, nil)
 	client := &haClient{url: apiURL, token: apiToken}
 
 	// Build entity lookup
-	entities := make(map[string]HAEntity, len(cfg.Entities))
-	for _, e := range cfg.Entities {
+	entities := make(map[string]config.HAEntity, len(cfgEntities))
+	for _, e := range cfgEntities {
 		entities[e.Name] = e
 	}
 
 	// Build descriptions for tool help
 	var entityList []string
-	for _, e := range cfg.Entities {
+	for _, e := range cfgEntities {
 		actions := categoryActions[e.Category]
 		entityList = append(entityList, fmt.Sprintf("- %s (%s): %s [actions: %s]",
 			e.Name, e.Category, e.Description, strings.Join(actions, ", ")))
@@ -161,7 +147,7 @@ func HomeAssistantServer(cfg *HAConfig, apiURL, apiToken string) *Server {
 
 		// All entities
 		var lines []string
-		for _, e := range cfg.Entities {
+		for _, e := range cfgEntities {
 			raw, err := client.getState(ctx, e.ID)
 			if err != nil {
 				lines = append(lines, fmt.Sprintf("%s: error (%v)", e.Name, err))
@@ -241,15 +227,3 @@ func HomeAssistantServer(cfg *HAConfig, apiURL, apiToken string) *Server {
 }
 
 // TryLoadHAConfig attempts to load ha.toml from the given path. Returns nil if not found.
-func TryLoadHAConfig(path string) *HAConfig {
-	var cfg HAConfig
-	if _, err := toml.DecodeFile(path, &cfg); err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		slog.Warn("ha: failed to load config", "path", path, "err", err)
-		return nil
-	}
-	slog.Info("ha: loaded config", "entities", len(cfg.Entities))
-	return &cfg
-}
