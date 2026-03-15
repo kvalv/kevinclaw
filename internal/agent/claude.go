@@ -18,6 +18,7 @@ type streamEvent struct {
 	Message   json.RawMessage `json:"message,omitempty"`
 	Result    string          `json:"result,omitempty"`
 	SessionID string          `json:"session_id,omitempty"`
+	NumTurns  int             `json:"num_turns,omitempty"`
 }
 
 type assistantMessage struct {
@@ -25,23 +26,26 @@ type assistantMessage struct {
 }
 
 type contentBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
+	Type  string          `json:"type"`
+	Text  string          `json:"text,omitempty"`
+	Name  string          `json:"name,omitempty"`  // tool_use: tool name
+	Input json.RawMessage `json:"input,omitempty"` // tool_use: arguments
 }
 
 // buildMCPConfig creates an mcp-config JSON string for streamable HTTP servers.
-func buildMCPConfig(servers map[string]string) string {
+func buildMCPConfig(servers map[string]MCPServer) string {
 	type mcpServer struct {
-		Type string `json:"type"`
-		URL  string `json:"url"`
+		Type    string            `json:"type"`
+		URL     string            `json:"url"`
+		Headers map[string]string `json:"headers,omitempty"`
 	}
 	cfg := struct {
 		MCPServers map[string]mcpServer `json:"mcpServers"`
 	}{
 		MCPServers: make(map[string]mcpServer, len(servers)),
 	}
-	for name, url := range servers {
-		cfg.MCPServers[name] = mcpServer{Type: "http", URL: url}
+	for name, s := range servers {
+		cfg.MCPServers[name] = mcpServer{Type: "http", URL: s.URL, Headers: s.Headers}
 	}
 	// Write to temp file — claude CLI expects a file path or JSON string
 	f, err := os.CreateTemp("", "kevinclaw-mcp-*.json")
@@ -52,6 +56,16 @@ func buildMCPConfig(servers map[string]string) string {
 	json.NewEncoder(f).Encode(cfg)
 	f.Close()
 	return f.Name()
+}
+
+// expandPath expands ~ and environment variables in a path.
+func expandPath(p string) string {
+	if strings.HasPrefix(p, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			p = home + p[1:]
+		}
+	}
+	return os.ExpandEnv(p)
 }
 
 // ClaudeRunner returns a Runner that spawns the claude CLI as a subprocess.
@@ -76,9 +90,14 @@ func ClaudeRunner(cfg Config) Runner {
 			args = append(args, "--mcp-config", mcpConfig)
 		}
 
-		if len(cfg.AllowedPaths) > 0 {
+		if len(opts.AllowedTools) > 0 {
+			// Per-invocation override (e.g. restricted user)
+			args = append(args, "--allowedTools", strings.Join(opts.AllowedTools, " "))
+		} else if len(cfg.AllowedPaths) > 0 {
+			// Default: owner gets full access with path-scoped Edit/Write
 			var tools []string
 			for _, p := range cfg.AllowedPaths {
+				p = expandPath(p)
 				tools = append(tools, fmt.Sprintf("Edit(%s/**)", p))
 				tools = append(tools, fmt.Sprintf("Write(%s/**)", p))
 			}
@@ -86,7 +105,7 @@ func ClaudeRunner(cfg Config) Runner {
 			args = append(args, "--allowedTools", strings.Join(tools, " "))
 
 			for _, p := range cfg.AllowedPaths {
-				args = append(args, "--add-dir", p)
+				args = append(args, "--add-dir", expandPath(p))
 			}
 		}
 

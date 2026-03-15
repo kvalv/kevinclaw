@@ -12,11 +12,16 @@ import (
 // SessionKey identifies a conversation context. Opaque string — caller decides the format.
 type SessionKey string
 
+type MCPServer struct {
+	URL     string
+	Headers map[string]string // optional, e.g. {"Authorization": "Bearer xxx"}
+}
+
 type Config struct {
 	IdleTimeout    time.Duration
 	WorkDir        string
 	SystemPrompt   string
-	MCPServers     map[string]string // name -> URL (streamable HTTP)
+	MCPServers     map[string]MCPServer
 	AllowedPaths   []string
 	PermissionMode string // e.g. "bypassPermissions"
 }
@@ -25,14 +30,20 @@ type Config struct {
 type RunOpts struct {
 	SessionID         string
 	DisallowedServers []string // MCP server names to block (e.g. "gcal")
+	AllowedTools      []string // if non-empty, restricts built-in tools (overrides Config.AllowedPaths)
 }
 
 // Runner executes a claude query and returns stream-json output lines.
 type Runner func(ctx context.Context, prompt string, opts RunOpts) ([]string, error)
 
-// Policy decides which MCP servers to block for a given message context.
-// Returns a list of MCP server names to disallow.
-type Policy func(userID, channel string) []string
+// Restrictions returned by a Policy.
+type Restrictions struct {
+	DisallowedServers []string // MCP server names to block
+	AllowedTools      []string // if set, overrides default tool access
+}
+
+// Policy decides tool restrictions for a given message context.
+type Policy func(userID, channel string) Restrictions
 
 // SessionStore persists session IDs across restarts.
 type SessionStore interface {
@@ -95,9 +106,9 @@ func (a *Agent) WithPolicy(p Policy) *Agent {
 func (a *Agent) HandleMessage(ctx context.Context, key SessionKey, text, userID, channel string) (string, error) {
 	sessionID, _ := a.sessions.GetSession(ctx, string(key))
 
-	var blocked []string
+	var r Restrictions
 	if a.policy != nil {
-		blocked = a.policy(userID, channel)
+		r = a.policy(userID, channel)
 	}
 
 	slog.Info("agent: handling message",
@@ -105,13 +116,15 @@ func (a *Agent) HandleMessage(ctx context.Context, key SessionKey, text, userID,
 		"session_id", sessionID,
 		"resuming", sessionID != "",
 		"prompt_len", len(text),
-		"blocked_servers", blocked,
+		"blocked_servers", r.DisallowedServers,
+		"restricted_tools", r.AllowedTools != nil,
 	)
 
 	start := time.Now()
 	lines, err := a.runner(ctx, text, RunOpts{
 		SessionID:         sessionID,
-		DisallowedServers: blocked,
+		DisallowedServers: r.DisallowedServers,
+		AllowedTools:      r.AllowedTools,
 	})
 	elapsed := time.Since(start)
 	if err != nil {
@@ -147,7 +160,18 @@ func parseResponse(lines []string) (result string, sessionID string, err error) 
 		if err := json.Unmarshal([]byte(line), &ev); err != nil {
 			continue
 		}
-		if ev.Type == "result" {
+		switch ev.Type {
+		case "assistant":
+			var msg assistantMessage
+			if err := json.Unmarshal(ev.Message, &msg); err == nil {
+				for _, block := range msg.Content {
+					if block.Type == "tool_use" {
+						slog.Info("agent: tool call", "tool", block.Name, "input_len", len(block.Input))
+					}
+				}
+			}
+		case "result":
+			slog.Info("agent: completed", "turns", ev.NumTurns, "status", ev.Subtype)
 			if ev.Subtype == "error" {
 				return "", "", fmt.Errorf("claude error: %s", ev.Result)
 			}

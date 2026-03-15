@@ -15,9 +15,12 @@ type Environment struct {
 	OWNER_USER_ID   string
 	DATABASE_URL    string
 
-	GOOGLE_CLIENT_ID     string
-	GOOGLE_CLIENT_SECRET string
-	GOOGLE_REFRESH_TOKEN string
+	GOOGLE_CLIENT_ID        string
+	GOOGLE_CLIENT_SECRET    string
+	GOOGLE_REFRESH_TOKEN    string
+	LINEAR_API_KEY          string
+	HOMEASSISTANT_API_URL   string
+	HOMEASSISTANT_API_TOKEN string
 }
 
 func New() (Environment, error) {
@@ -42,10 +45,13 @@ func New() (Environment, error) {
 		return env, err
 	}
 
-	// Optional: Google Calendar (no error if missing)
+	// Optional integrations (no error if missing)
 	env.GOOGLE_CLIENT_ID, _ = parseStr("GOOGLE_CLIENT_ID")
 	env.GOOGLE_CLIENT_SECRET, _ = parseStr("GOOGLE_CLIENT_SECRET")
 	env.GOOGLE_REFRESH_TOKEN, _ = parseStr("GOOGLE_REFRESH_TOKEN")
+	env.LINEAR_API_KEY, _ = parseStr("LINEAR_API_KEY")
+	env.HOMEASSISTANT_API_URL, _ = parseStr("HOMEASSISTANT_API_URL")
+	env.HOMEASSISTANT_API_TOKEN, _ = parseStr("HOMEASSISTANT_API_TOKEN")
 
 	return env, nil
 }

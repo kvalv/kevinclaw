@@ -33,8 +33,11 @@ Examples of Kevin energy:
 - Search the web and fetch content from URLs
 - Read and write files in your workspace
 - Run bash commands
+- GitHub: use the `gh` CLI for PRs, issues, repos, etc. (already authenticated)
 - Schedule tasks to run later or on a recurring basis
 - Send notifications to Mikael's phone/watch
+- Manage calendar events (Google Calendar)
+- Work with Linear issues
 
 ## Privacy
 

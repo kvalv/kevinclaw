@@ -1,0 +1,25 @@
+# API URL and token from env: HOMEASSISTANT_API_URL, HOMEASSISTANT_API_TOKEN
+
+[[entities]]
+id = "vacuum.roborock"
+name = "vacuum"
+category = "vacuum"            # actions: start, stop, dock, status
+description = "Robot vacuum"
+
+[[entities]]
+id = "light.living_room"
+name = "living_room_lights"
+category = "light"             # actions: turn_on, turn_off, status
+description = "Living room ceiling lights"
+
+[[entities]]
+id = "cover.bedroom_curtain"
+name = "bedroom_curtain"
+category = "cover"             # actions: open, close, stop, status
+description = "Bedroom curtain"
+
+[[entities]]
+id = "sensor.temperature"
+name = "room_temp"
+category = "sensor"            # actions: status (read-only)
+description = "Room temperature (celsius)"

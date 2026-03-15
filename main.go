@@ -52,14 +52,14 @@ func run(ctx context.Context) error {
 	d := postgres.New(pool)
 
 	// Start MCP servers
-	mcpServers := make(map[string]string)
+	mcpServers := make(map[string]agent.MCPServer)
 
 	debugAddr, debugShutdown, err := mcp.ServeHTTP(ctx, mcp.DebugServer(), "localhost:0")
 	if err != nil {
 		return fmt.Errorf("debug mcp: %w", err)
 	}
 	defer debugShutdown()
-	mcpServers["debug"] = debugAddr
+	mcpServers["debug"] = agent.MCPServer{URL: debugAddr}
 
 	if env.GOOGLE_REFRESH_TOKEN != "" {
 		gcalClient := gcal.New(env.GOOGLE_CLIENT_ID, env.GOOGLE_CLIENT_SECRET, env.GOOGLE_REFRESH_TOKEN)
@@ -68,7 +68,23 @@ func run(ctx context.Context) error {
 			return fmt.Errorf("gcal mcp: %w", err)
 		}
 		defer gcalShutdown()
-		mcpServers["gcal"] = gcalAddr
+		mcpServers["gcal"] = agent.MCPServer{URL: gcalAddr}
+	}
+
+	if haCfg := mcp.TryLoadHAConfig(filepath.Join(projectRoot(), "ha.toml")); haCfg != nil && env.HOMEASSISTANT_API_URL != "" {
+		haAddr, haShutdown, err := mcp.ServeHTTP(ctx, mcp.HomeAssistantServer(haCfg, env.HOMEASSISTANT_API_URL, env.HOMEASSISTANT_API_TOKEN), "localhost:0")
+		if err != nil {
+			return fmt.Errorf("ha mcp: %w", err)
+		}
+		defer haShutdown()
+		mcpServers["homeassistant"] = agent.MCPServer{URL: haAddr}
+	}
+
+	if env.LINEAR_API_KEY != "" {
+		mcpServers["linear"] = agent.MCPServer{
+			URL:     "https://mcp.linear.app/mcp",
+			Headers: map[string]string{"Authorization": "Bearer " + env.LINEAR_API_KEY},
+		}
 	}
 
 	a := agent.New(agent.Config{
@@ -77,11 +93,15 @@ func run(ctx context.Context) error {
 		SystemPrompt:   kevinPrompt,
 		PermissionMode: "bypassPermissions",
 		MCPServers:     mcpServers,
-	}).WithSessionStore(d).WithPolicy(func(userID, channel string) []string {
+		AllowedPaths:   []string{"~/src/main/a"},
+	}).WithSessionStore(d).WithPolicy(func(userID, channel string) agent.Restrictions {
 		if userID == env.OWNER_USER_ID {
-			return nil // owner gets everything
+			return agent.Restrictions{} // owner gets everything
 		}
-		return []string{"gcal"} // non-owner: block private tools
+		return agent.Restrictions{
+			DisallowedServers: []string{"gcal", "linear", "cron", "debug", "homeassistant"},
+			AllowedTools:      []string{"Read", "Glob", "Grep", "WebSearch", "WebFetch"},
+		}
 	})
 
 	sc := slack.New(env.SLACK_BOT_TOKEN, env.SLACK_APP_TOKEN)
