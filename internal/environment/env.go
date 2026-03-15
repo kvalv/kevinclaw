@@ -14,6 +14,10 @@ type Environment struct {
 	SLACK_APP_TOKEN string
 	OWNER_USER_ID   string
 	DATABASE_URL    string
+
+	GOOGLE_CLIENT_ID     string
+	GOOGLE_CLIENT_SECRET string
+	GOOGLE_REFRESH_TOKEN string
 }
 
 func New() (Environment, error) {
@@ -37,6 +41,11 @@ func New() (Environment, error) {
 	if env.DATABASE_URL, err = parseStr("DATABASE_URL"); err != nil {
 		return env, err
 	}
+
+	// Optional: Google Calendar (no error if missing)
+	env.GOOGLE_CLIENT_ID, _ = parseStr("GOOGLE_CLIENT_ID")
+	env.GOOGLE_CLIENT_SECRET, _ = parseStr("GOOGLE_CLIENT_SECRET")
+	env.GOOGLE_REFRESH_TOKEN, _ = parseStr("GOOGLE_REFRESH_TOKEN")
 
 	return env, nil
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/kvalv/kevinclaw/internal/agent"
 	"github.com/kvalv/kevinclaw/internal/cron"
 	"github.com/kvalv/kevinclaw/internal/environment"
+	"github.com/kvalv/kevinclaw/internal/gcal"
 	"github.com/kvalv/kevinclaw/internal/mcp"
 	"github.com/kvalv/kevinclaw/internal/postgres"
 	"github.com/kvalv/kevinclaw/internal/slack"
@@ -50,21 +51,32 @@ func run(ctx context.Context) error {
 
 	d := postgres.New(pool)
 
-	// Start debug MCP server
+	// Start MCP servers
+	mcpServers := make(map[string]string)
+
 	debugAddr, debugShutdown, err := mcp.ServeHTTP(ctx, mcp.DebugServer(), "localhost:0")
 	if err != nil {
 		return fmt.Errorf("debug mcp: %w", err)
 	}
 	defer debugShutdown()
+	mcpServers["debug"] = debugAddr
+
+	if env.GOOGLE_REFRESH_TOKEN != "" {
+		gcalClient := gcal.New(env.GOOGLE_CLIENT_ID, env.GOOGLE_CLIENT_SECRET, env.GOOGLE_REFRESH_TOKEN)
+		gcalAddr, gcalShutdown, err := mcp.ServeHTTP(ctx, mcp.GCalServer(gcalClient), "localhost:0")
+		if err != nil {
+			return fmt.Errorf("gcal mcp: %w", err)
+		}
+		defer gcalShutdown()
+		mcpServers["gcal"] = gcalAddr
+	}
 
 	a := agent.New(agent.Config{
 		IdleTimeout:    5 * time.Minute,
 		WorkDir:        projectRoot(),
 		SystemPrompt:   kevinPrompt,
 		PermissionMode: "bypassPermissions",
-		MCPServers: map[string]string{
-			"debug": debugAddr,
-		},
+		MCPServers:     mcpServers,
 	}).WithSessionStore(d)
 
 	sc := slack.New(env.SLACK_BOT_TOKEN, env.SLACK_APP_TOKEN)
