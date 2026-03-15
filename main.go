@@ -77,12 +77,17 @@ func run(ctx context.Context) error {
 		SystemPrompt:   kevinPrompt,
 		PermissionMode: "bypassPermissions",
 		MCPServers:     mcpServers,
-	}).WithSessionStore(d)
+	}).WithSessionStore(d).WithPolicy(func(userID, channel string) []string {
+		if userID == env.OWNER_USER_ID {
+			return nil // owner gets everything
+		}
+		return []string{"gcal"} // non-owner: block private tools
+	})
 
 	sc := slack.New(env.SLACK_BOT_TOKEN, env.SLACK_APP_TOKEN)
 
 	sched, err := cron.New(ctx, pool, func(ctx context.Context, sessionKey, prompt string) error {
-		reply, err := a.HandleMessage(ctx, agent.SessionKey(sessionKey), prompt)
+		reply, err := a.HandleMessage(ctx, agent.SessionKey(sessionKey), prompt, env.OWNER_USER_ID, "")
 		if err != nil {
 			return err
 		}
@@ -108,7 +113,7 @@ func run(ctx context.Context) error {
 			}
 
 			key := agent.SessionKey(ev.Channel + ":" + ev.ThreadTS)
-			reply, err := a.HandleMessage(ctx, key, ev.Text)
+			reply, err := a.HandleMessage(ctx, key, ev.Text, ev.UserID, ev.Channel)
 
 			if rmErr := sc.RemoveReaction(ctx, ev.Channel, ev.MessageTS, "eyes"); rmErr != nil {
 				slog.Warn("remove eyes reaction failed", "err", rmErr)

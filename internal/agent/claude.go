@@ -56,15 +56,15 @@ func buildMCPConfig(servers map[string]string) string {
 
 // ClaudeRunner returns a Runner that spawns the claude CLI as a subprocess.
 func ClaudeRunner(cfg Config) Runner {
-	return func(ctx context.Context, prompt string, sessionID string) ([]string, error) {
+	return func(ctx context.Context, prompt string, opts RunOpts) ([]string, error) {
 		args := []string{
 			"-p",
 			"--output-format", "stream-json",
 			"--verbose",
 		}
 
-		if sessionID != "" {
-			args = append(args, "--resume", sessionID)
+		if opts.SessionID != "" {
+			args = append(args, "--resume", opts.SessionID)
 		}
 
 		if cfg.SystemPrompt != "" {
@@ -94,9 +94,17 @@ func ClaudeRunner(cfg Config) Runner {
 			args = append(args, "--permission-mode", cfg.PermissionMode)
 		}
 
+		if len(opts.DisallowedServers) > 0 {
+			var patterns []string
+			for _, name := range opts.DisallowedServers {
+				patterns = append(patterns, fmt.Sprintf("mcp__%s__*", name))
+			}
+			args = append(args, "--disallowedTools", strings.Join(patterns, " "))
+		}
+
 		args = append(args, prompt)
 
-		slog.Debug("claude: spawning", "args_count", len(args), "session_id", sessionID, "workdir", cfg.WorkDir)
+		slog.Debug("claude: spawning", "args_count", len(args), "session_id", opts.SessionID, "workdir", cfg.WorkDir)
 
 		cmd := exec.CommandContext(ctx, "claude", args...)
 		if cfg.WorkDir != "" {

@@ -21,9 +21,18 @@ type Config struct {
 	PermissionMode string // e.g. "bypassPermissions"
 }
 
+// RunOpts are per-invocation options passed to the Runner.
+type RunOpts struct {
+	SessionID         string
+	DisallowedServers []string // MCP server names to block (e.g. "gcal")
+}
+
 // Runner executes a claude query and returns stream-json output lines.
-// sessionID is empty for new conversations, or a previous session ID to resume.
-type Runner func(ctx context.Context, prompt string, sessionID string) ([]string, error)
+type Runner func(ctx context.Context, prompt string, opts RunOpts) ([]string, error)
+
+// Policy decides which MCP servers to block for a given message context.
+// Returns a list of MCP server names to disallow.
+type Policy func(userID, channel string) []string
 
 // SessionStore persists session IDs across restarts.
 type SessionStore interface {
@@ -31,7 +40,6 @@ type SessionStore interface {
 	SaveSession(ctx context.Context, key, claudeSession string) error
 }
 
-// memoryStore is the default in-memory session store.
 type memoryStore struct {
 	mu       sync.Mutex
 	sessions map[string]string
@@ -54,6 +62,7 @@ type Agent struct {
 	cfg      Config
 	runner   Runner
 	sessions SessionStore
+	policy   Policy
 }
 
 func New(cfg Config) *Agent {
@@ -76,21 +85,34 @@ func (a *Agent) WithSessionStore(s SessionStore) *Agent {
 	return a
 }
 
+func (a *Agent) WithPolicy(p Policy) *Agent {
+	a.policy = p
+	return a
+}
+
 // HandleMessage sends a prompt to claude and returns the text response.
-// Resumes the session if one exists for this key.
-func (a *Agent) HandleMessage(ctx context.Context, key SessionKey, text string) (string, error) {
+// userID and channel are used by the policy to determine tool restrictions.
+func (a *Agent) HandleMessage(ctx context.Context, key SessionKey, text, userID, channel string) (string, error) {
 	sessionID, _ := a.sessions.GetSession(ctx, string(key))
 
-	resuming := sessionID != ""
+	var blocked []string
+	if a.policy != nil {
+		blocked = a.policy(userID, channel)
+	}
+
 	slog.Info("agent: handling message",
 		"session_key", key,
 		"session_id", sessionID,
-		"resuming", resuming,
+		"resuming", sessionID != "",
 		"prompt_len", len(text),
+		"blocked_servers", blocked,
 	)
 
 	start := time.Now()
-	lines, err := a.runner(ctx, text, sessionID)
+	lines, err := a.runner(ctx, text, RunOpts{
+		SessionID:         sessionID,
+		DisallowedServers: blocked,
+	})
 	elapsed := time.Since(start)
 	if err != nil {
 		slog.Error("agent: runner failed", "session_key", key, "elapsed", elapsed, "err", err)
@@ -119,7 +141,6 @@ func (a *Agent) HandleMessage(ctx context.Context, key SessionKey, text string) 
 	return result, nil
 }
 
-// parseResponse extracts the result text and session ID from stream-json lines.
 func parseResponse(lines []string) (result string, sessionID string, err error) {
 	for _, line := range lines {
 		var ev streamEvent

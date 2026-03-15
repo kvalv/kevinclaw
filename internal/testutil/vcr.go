@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/kvalv/kevinclaw/internal/agent"
 )
 
 type recording struct {
@@ -146,13 +148,13 @@ func queryClaude(t *testing.T, turn int, prompt, sessionID string) []string {
 }
 
 // ClaudeVCR returns an agent.Runner backed by recorded Claude CLI responses.
-// Each call is keyed by (test name, turn index, prompt hash). On first run
-// (with AGENT_INTEGRATION=1), it calls the real CLI (with --resume for
-// multi-turn) and saves responses. On subsequent runs, it replays from cache.
-func ClaudeVCR(t *testing.T) func(ctx context.Context, prompt string, sessionID string) ([]string, error) {
+// On first run (with AGENT_INTEGRATION=1), it calls the real CLI and saves the
+// response to testdata/recordings.jsonl keyed by (test name, turn index, prompt hash).
+// On subsequent runs, it replays the cached response without hitting the CLI.
+func ClaudeVCR(t *testing.T) agent.Runner {
 	turn := 0
-	return func(_ context.Context, prompt string, sessionID string) ([]string, error) {
-		lines := queryClaude(t, turn, prompt, sessionID)
+	return func(_ context.Context, prompt string, opts agent.RunOpts) ([]string, error) {
+		lines := queryClaude(t, turn, prompt, opts.SessionID)
 		turn++
 		return lines, nil
 	}

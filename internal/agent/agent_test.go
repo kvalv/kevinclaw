@@ -1,6 +1,7 @@
 package agent_test
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -17,15 +18,13 @@ func TestHandleMessage_MultiTurn(t *testing.T) {
 
 	key := agent.SessionKey("test:multi")
 
-	// Turn 1: establish a fact
-	got, err := a.HandleMessage(t.Context(), key, "The secret number is 42. Just say OK.")
+	got, err := a.HandleMessage(t.Context(), key, "The secret number is 42. Just say OK.", "U123", "C123")
 	if err != nil {
 		t.Fatalf("turn 1: %v", err)
 	}
 	t.Logf("turn 1: %q", got)
 
-	// Turn 2: ask it to recall
-	got, err = a.HandleMessage(t.Context(), key, "What is the secret number I just told you? Reply with just the number.")
+	got, err = a.HandleMessage(t.Context(), key, "What is the secret number I just told you? Reply with just the number.", "U123", "C123")
 	if err != nil {
 		t.Fatalf("turn 2: %v", err)
 	}
@@ -36,13 +35,46 @@ func TestHandleMessage_MultiTurn(t *testing.T) {
 	}
 }
 
+func TestHandleMessage_PolicyBlocksServers(t *testing.T) {
+	okResult := `{"type":"result","subtype":"success","result":"ok","session_id":"s1"}`
+
+	var gotOpts agent.RunOpts
+	captureOpts := func(_ context.Context, _ string, opts agent.RunOpts) ([]string, error) {
+		gotOpts = opts
+		return []string{okResult}, nil
+	}
+
+	ownerGetsAll := func(userID, channel string) []string {
+		if userID == "owner" {
+			return nil
+		}
+		return []string{"gcal", "cron"}
+	}
+
+	a := agent.New(agent.Config{}).WithRunner(captureOpts).WithPolicy(ownerGetsAll)
+
+	t.Run("non-owner gets blocked", func(t *testing.T) {
+		a.HandleMessage(t.Context(), "k1", "hi", "stranger", "C123")
+		if len(gotOpts.DisallowedServers) != 2 {
+			t.Fatalf("expected 2 blocked servers, got %v", gotOpts.DisallowedServers)
+		}
+	})
+
+	t.Run("owner gets everything", func(t *testing.T) {
+		a.HandleMessage(t.Context(), "k2", "hi", "owner", "C123")
+		if len(gotOpts.DisallowedServers) != 0 {
+			t.Fatalf("expected 0 blocked servers, got %v", gotOpts.DisallowedServers)
+		}
+	})
+}
+
 func TestHandleMessage_SimpleQuestion(t *testing.T) {
 	a := agent.New(agent.Config{
 		IdleTimeout: 30 * time.Second,
 		WorkDir:     t.TempDir(),
 	}).WithRunner(testutil.ClaudeVCR(t))
 
-	got, err := a.HandleMessage(t.Context(), agent.SessionKey("test:1"), "what is 2+2? reply with just the number")
+	got, err := a.HandleMessage(t.Context(), agent.SessionKey("test:1"), "what is 2+2? reply with just the number", "U123", "C123")
 	if err != nil {
 		t.Fatalf("HandleMessage: %v", err)
 	}

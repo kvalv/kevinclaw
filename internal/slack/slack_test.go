@@ -121,7 +121,7 @@ func TestSlackRoundTrip(t *testing.T) {
 		t.Logf("received event: channel=%s text=%q", ev.Channel, ev.Text)
 
 		// Run through agent
-		reply, err := a.HandleMessage(ctx, agent.SessionKey(ev.Channel+":"+ev.ThreadTS), ev.Text)
+		reply, err := a.HandleMessage(ctx, agent.SessionKey(ev.Channel+":"+ev.ThreadTS), ev.Text, ev.UserID, ev.Channel)
 		if err != nil {
 			t.Fatalf("HandleMessage: %v", err)
 		}
