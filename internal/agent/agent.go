@@ -64,6 +64,8 @@ func New(cfg Config) *Agent {
 	}
 }
 
+func (a *Agent) Config() Config { return a.cfg }
+
 func (a *Agent) WithRunner(r Runner) *Agent {
 	a.runner = r
 	return a

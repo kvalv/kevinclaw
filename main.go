@@ -84,7 +84,7 @@ func run(ctx context.Context) error {
 	}
 	defer sched.Stop(ctx)
 
-	slog.Info("kevinclaw starting")
+	logStartupInfo(a)
 	return sc.Listen(ctx, func(ev slack.Event) {
 		go func() {
 			if err := d.SaveMessage(ctx, ev.Channel, ev.ThreadTS, ev.MessageTS, ev.UserID, ev.Text); err != nil {
@@ -135,6 +135,33 @@ func setupDB(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	}
 	slog.Info("db: migrations applied")
 	return pool, nil
+}
+
+func logStartupInfo(a *agent.Agent) {
+	cfg := a.Config()
+
+	// Discover skills
+	var skills []string
+	skillsDir := filepath.Join(cfg.WorkDir, ".claude", "skills")
+	if entries, err := os.ReadDir(skillsDir); err == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				skills = append(skills, e.Name())
+			}
+		}
+	}
+
+	// MCP servers
+	var mcpNames []string
+	for name := range cfg.MCPServers {
+		mcpNames = append(mcpNames, name)
+	}
+
+	slog.Info("kevinclaw starting",
+		"skills", skills,
+		"mcp_servers", mcpNames,
+		"workdir", cfg.WorkDir,
+	)
 }
 
 func projectRoot() string {
