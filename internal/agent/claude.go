@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -136,24 +137,33 @@ func ClaudeRunner(cfg Config) Runner {
 
 		args = append(args, prompt)
 
-		slog.Debug("claude: spawning", "args_count", len(args), "session_id", opts.SessionID, "workdir", cfg.WorkDir)
-
 		cmd := exec.CommandContext(ctx, "claude", args...)
 		if cfg.WorkDir != "" {
 			cmd.Dir = cfg.WorkDir
 		}
 
-		out, err := cmd.Output()
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+
+		if err := cmd.Start(); err != nil {
+			return nil, fmt.Errorf("starting claude: %w", err)
+		}
+		slog.Info("claude: spawned", "pid", cmd.Process.Pid, "session_id", opts.SessionID, "workdir", cfg.WorkDir)
+
+		err := cmd.Wait()
+		slog.Info("claude: exited", "pid", cmd.Process.Pid, "exit_code", cmd.ProcessState.ExitCode())
+
 		if err != nil {
 			if exitErr, ok := err.(*exec.ExitError); ok {
-				slog.Error("claude: exited with error", "code", exitErr.ExitCode(), "stderr", string(exitErr.Stderr))
-				return nil, fmt.Errorf("claude exited %d: %s", exitErr.ExitCode(), string(exitErr.Stderr))
+				slog.Error("claude: exited with error", "code", exitErr.ExitCode(), "stderr", stderr.String())
+				return nil, fmt.Errorf("claude exited %d: %s", exitErr.ExitCode(), stderr.String())
 			}
 			return nil, err
 		}
 
 		var lines []string
-		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		for _, line := range strings.Split(strings.TrimSpace(stdout.String()), "\n") {
 			if line != "" {
 				lines = append(lines, line)
 			}

@@ -34,6 +34,8 @@ If any axis is low, tell the owner why and ask for guidance instead of proceedin
 
 If assessment passes, call `bugfix_create` with the issue details, confidence scores, worktree path, and branch name.
 
+**If the issue touches `apps/`**: before writing any code, you MUST start the dev server, open the browser, navigate to the affected page, and take a "before" screenshot. This is non-negotiable — you need to SEE the bug first. Post the screenshot to the draft PR.
+
 ## 2. Set up branch + draft PR
 
 Work in the git worktree at `~/src/main/kevin-1`:
@@ -93,7 +95,9 @@ TDD approach:
 
 That's it. Two commits: failing test, then fix.
 
-### Frontend issues (apps/)
+### Frontend issues (apps/) — ALWAYS take screenshots
+
+**Any bug in `apps/` is a frontend issue.** You MUST start the dev server and take before/after screenshots. This is how the reviewer validates your fix — without screenshots, the PR is incomplete.
 
 If the bug is in `apps/`, start the dev server first:
 
@@ -149,12 +153,17 @@ Also DM the owner via `slack_send_message` for important updates. Call `bugfix_u
 
 **Frontend:** just push. Don't worry about translations, prettier, or CI lint — we'll fix those when wrapping up the PR.
 
-When the diff looks good:
+When the diff looks good, do NOT mark as ready yet. First:
 
-1. Edit the PR body to reflect the final state (remove WIP notes, add summary of what changed)
-2. Update status: `gh pr ready {pr-number}` (removes draft)
-3. DM the owner: "PR ready, who should review?"
-4. Add reviewer once owner responds: `gh pr edit {pr-number} --add-reviewer {username}`
+1. Wait for CI to pass: `gh pr checks {pr-number} --watch`
+2. If CI fails, fix the issues and push again. Repeat until CI is green.
+3. Check for bot review comments (bugbot, cursor, etc.): `gh pr view {pr-number} --comments`
+4. Address all bot comments — fix issues, push, respond to each.
+5. Only when CI is green AND all bot comments are addressed:
+   - Edit the PR body to reflect the final state (remove WIP notes, add summary of what changed)
+   - `gh pr ready {pr-number}` (removes draft)
+   - DM the owner: "PR ready, who should review?"
+   - Add reviewer once owner responds: `gh pr edit {pr-number} --add-reviewer {username}`
 
 ## 5. Log
 

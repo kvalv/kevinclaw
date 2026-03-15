@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# kevin-ps — show Kevin's running processes
+# Usage: kevin-ps        (summary)
+#        kevin-ps -v     (verbose, includes system prompt snippet)
+
+set -euo pipefail
+
+VERBOSE="${1:-}"
+
+echo "=== kevinclaw ==="
+ps aux | grep kevinclaw | grep -v grep | grep -v kevin-ps | awk '{printf "PID %-8s CPU %-5s MEM %-5s STARTED %s %s\n", $2, $3, $4, $9, $10}' || echo "(not running)"
+
+echo ""
+echo "=== claude subprocesses ==="
+ps aux | grep "claude.*--system-prompt" | grep -v grep | while read -r line; do
+    pid=$(echo "$line" | awk '{print $2}')
+    cpu=$(echo "$line" | awk '{print $3}')
+    mem=$(echo "$line" | awk '{print $4}')
+    start=$(echo "$line" | awk '{print $9, $10}')
+    session=$(echo "$line" | grep -oP '(?<=--resume )\S+' || echo "new")
+
+    echo "PID $pid  CPU ${cpu}%  MEM ${mem}%  STARTED $start  SESSION ${session:0:12}..."
+
+    if [ "$VERBOSE" = "-v" ]; then
+        # Extract the last user message from the prompt
+        echo "$line" | grep -oP 'Recent messages:.*' | tail -c 200 | sed 's/^/  CONTEXT: /'
+        echo ""
+    fi
+done || echo "(none)"
+
+echo ""
+echo "=== bugfixes (active) ==="
+if command -v psql &>/dev/null && [ -f "$(dirname "$0")/../.env" ]; then
+    source "$(dirname "$0")/../.env"
+    psql "$DATABASE_URL" -t --no-align -F '|' -c \
+        "SELECT id, linear_issue_id, title, status, pr_url,
+                EXTRACT(EPOCH FROM (now() - COALESCE(last_human_update_at, started_at, created_at)))::int / 60 as mins_since_update
+         FROM bugfixes
+         WHERE status IN ('running', 'review', 'stuck', 'pending')
+         ORDER BY created_at" 2>/dev/null | while IFS='|' read -r id issue title status pr mins; do
+        echo "  #$id  $issue  [$status]  ${mins}min since update  $title"
+        [ -n "$pr" ] && echo "        PR: $pr"
+    done || echo "  (none)"
+else
+    echo "  (no DB access)"
+fi
