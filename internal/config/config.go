@@ -27,9 +27,15 @@ type Env struct {
 
 // Config holds runtime configuration loaded from kevin.yaml.
 type Config struct {
-	Paths         Paths         `yaml:"paths"`
-	HomeAssistant HomeAssistant `yaml:"homeassistant"`
-	HistoryLimit  int           `yaml:"history_limit"` // max channel messages as context (default 10)
+	Paths         Paths              `yaml:"paths"`
+	HomeAssistant HomeAssistant      `yaml:"homeassistant"`
+	HistoryLimit  int                `yaml:"history_limit"` // max channel messages as context (default 10)
+	Channels      map[string]Channel `yaml:"channels"`      // channel ID → config override
+}
+
+// Channel configures per-channel behavior.
+type Channel struct {
+	Mode string `yaml:"mode"` // "active" = process all messages (default: mention-only)
 }
 
 func (c *Config) GetHistoryLimit() int {

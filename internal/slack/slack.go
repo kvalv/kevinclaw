@@ -17,6 +17,7 @@ type Event struct {
 	ThreadTS  string // parent thread timestamp (empty if top-level)
 	Text      string
 	UserID    string
+	IsMention bool // true if this was an @mention of the bot
 }
 
 // SlackAPI is the subset of the slack.Client we use, for testability.
@@ -28,19 +29,22 @@ type SlackAPI interface {
 
 // Client wraps the Slack API for sending and receiving messages.
 type Client struct {
-	api       SlackAPI
-	raw       *slack.Client // needed for Socket Mode; nil when using a fake
-	appToken  string
-	userNames map[string]string // cache: user ID → display name
+	api          SlackAPI
+	raw          *slack.Client // needed for Socket Mode; nil when using a fake
+	appToken     string
+	userNames    map[string]string // cache: user ID → display name
+	channelNames map[string]string // cache: channel ID → channel name
 }
 
 // New creates a new Slack client.
 func New(botToken, appToken string) *Client {
 	c := slack.New(botToken, slack.OptionAppLevelToken(appToken))
 	return &Client{
-		api:      c,
-		raw:      c,
-		appToken: appToken,
+		api:          c,
+		raw:          c,
+		appToken:     appToken,
+		userNames:    make(map[string]string),
+		channelNames: make(map[string]string),
 	}
 }
 
@@ -82,6 +86,7 @@ func (c *Client) Listen(ctx context.Context, handler func(Event)) error {
 			ThreadTS:  threadTS,
 			Text:      text,
 			UserID:    user,
+			IsMention: source == "app_mention",
 		})
 	}
 
@@ -158,9 +163,6 @@ func (c *Client) AddReaction(ctx context.Context, channel, timestamp, emoji stri
 // GetUserName returns the display name for a Slack user ID, with caching.
 // Returns empty string on error (best-effort).
 func (c *Client) GetUserName(userID string) string {
-	if c.userNames == nil {
-		c.userNames = make(map[string]string)
-	}
 	if name, ok := c.userNames[userID]; ok {
 		return name
 	}
@@ -178,6 +180,24 @@ func (c *Client) GetUserName(userID string) string {
 	}
 	c.userNames[userID] = name
 	return name
+}
+
+// GetChannelName returns the channel name for a Slack channel ID, with caching.
+// Returns empty string on error (best-effort).
+func (c *Client) GetChannelName(channelID string) string {
+	if name, ok := c.channelNames[channelID]; ok {
+		return name
+	}
+	if c.raw == nil {
+		return ""
+	}
+	info, err := c.raw.GetConversationInfo(&slack.GetConversationInfoInput{ChannelID: channelID})
+	if err != nil {
+		slog.Warn("slack: failed to get channel info", "channel_id", channelID, "err", err)
+		return ""
+	}
+	c.channelNames[channelID] = info.Name
+	return info.Name
 }
 
 // RemoveReaction removes an emoji reaction from a message.

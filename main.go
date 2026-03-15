@@ -18,6 +18,7 @@ import (
 	"github.com/kvalv/kevinclaw/internal/mcp"
 	"github.com/kvalv/kevinclaw/internal/postgres"
 	"github.com/kvalv/kevinclaw/internal/slack"
+	"github.com/kvalv/kevinclaw/internal/util"
 	"github.com/kvalv/kevinclaw/migrations"
 )
 
@@ -94,17 +95,36 @@ func run(ctx context.Context) error {
 	agent.StartDailyLogRotation(ctx, memoryDir)
 
 	sc := slack.New(env.SLACK_BOT_TOKEN, env.SLACK_APP_TOKEN)
+	rl := util.NewPerHour(10)
 
 	logStartupInfo(a)
 	return sc.Listen(ctx, func(ev slack.Event) {
 		go func() {
+			// Always save messages to DB for context
 			userName := sc.GetUserName(ev.UserID)
 			if err := d.SaveMessage(ctx, ev.Channel, ev.ThreadTS, ev.MessageTS, ev.UserID, userName, ev.Text); err != nil {
 				slog.Error("db: save message failed", "err", err)
 			}
 
-			if err := sc.AddReaction(ctx, ev.Channel, ev.MessageTS, "eyes"); err != nil {
-				slog.Warn("eyes reaction failed", "err", err)
+			// Decide whether to process this message
+			shouldProcess := ev.IsMention
+			if !shouldProcess {
+				chName := sc.GetChannelName(ev.Channel)
+				if ch, ok := cfg.Channels[chName]; ok && ch.Mode == "active" {
+					shouldProcess = rl.Allow(ev.Channel)
+					if !shouldProcess {
+						slog.Info("ratelimit: skipping message", "channel", chName)
+					}
+				}
+			}
+			if !shouldProcess {
+				return
+			}
+
+			if ev.IsMention {
+				if err := sc.AddReaction(ctx, ev.Channel, ev.MessageTS, "eyes"); err != nil {
+					slog.Warn("eyes reaction failed", "err", err)
+				}
 			}
 
 			// Fetch recent messages for context
@@ -116,8 +136,10 @@ func run(ctx context.Context) error {
 			key := agent.SessionKey(ev.Channel + ":" + ev.ThreadTS)
 			reply, err := a.HandleMessage(ctx, key, ev.Text, ev.UserID, ev.Channel, agent.WithHistory(history))
 
-			if rmErr := sc.RemoveReaction(ctx, ev.Channel, ev.MessageTS, "eyes"); rmErr != nil {
-				slog.Warn("remove eyes reaction failed", "err", rmErr)
+			if ev.IsMention {
+				if rmErr := sc.RemoveReaction(ctx, ev.Channel, ev.MessageTS, "eyes"); rmErr != nil {
+					slog.Warn("remove eyes reaction failed", "err", rmErr)
+				}
 			}
 
 			if err != nil {
