@@ -24,6 +24,7 @@ You receive a Linear issue to assess. You must:
 2. Call `bugfix_start` with:
    - The bugfix ID
    - A detailed prompt for Darryl (the executor) including: what the bug is, where the code likely is, what approach to take, any context from the issue comments
+   - If the bug is in `apps/`, mention that this is a frontend bug and Darryl should follow the app-development workflow (dev server + screenshots)
    - The worktree path: `~/src/main/kevin-1`
    - A branch name: `kevin/{issue-id}-{short-description}`
 3. Send a DM to the owner (Mikael, channel D03UHGEG5SL) via `slack_send_message`: brief summary of assessment + "dispatching Darryl to fix it"

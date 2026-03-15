@@ -26,56 +26,51 @@ Call `bugfix_update` with `pr_url`.
 
 ### 2. Fix the bug
 
-**Backend (services/, jobs/, workers/):** TDD approach.
+**If Backend (services/, jobs/, workers/):** TDD approach.
 
 1. Write the smallest failing test. Commit: "Add failing test for {issue-id}"
 2. Implement the fix. Commit: "Fix: {issue title}\n\nCloses {issue-id}"
 
-**Frontend (apps/) — SCREENSHOTS ARE MANDATORY:**
-
-Any bug in `apps/` is a frontend issue. You MUST take before/after screenshots. Without them the PR is incomplete and will be rejected.
-
-Step by step:
+**If Frontend (apps/):** Screenshots are how you reproduce and prove the fix. No unit tests for frontend.
 
 1. Start the dev server:
 
-```bash
-cd {worktree_path}
-npm install
-REACT_APP_DEFAULT_USER="$REACT_APP_DEFAULT_USER" \
-REACT_APP_DEFAULT_PASSWORD="$REACT_APP_DEFAULT_PASSWORD" \
-npm run dev:proxy &
-```
+   ```bash
+   cd {worktree_path}
+   npm install
+   REACT_APP_DEFAULT_USER="$REACT_APP_DEFAULT_USER" \
+   REACT_APP_DEFAULT_PASSWORD="$REACT_APP_DEFAULT_PASSWORD" \
+   npm run dev:proxy &
+   ```
 
-2. Wait for server to be ready, then use the `browser` MCP tools:
+   Wait for `http://localhost:3000` to respond.
 
-   - `navigate_page` to the affected page (e.g. `http://localhost:3000/...`)
-   - `take_screenshot` to capture the bug state
-   - Save to `/tmp/{issue-id}-before.png`
+   If generating graphl types, run `npm run generate` after you have edited files.
 
-3. Upload and comment on PR:
+2. Use the `browser` MCP to navigate to the affected page and take a **before** screenshot:
 
-```bash
-BEFORE_URL=$(upload-screenshot /tmp/{issue-id}-before.png {issue-id}-before)
-gh pr comment {pr-number} --body "## Before
-![before]($BEFORE_URL)
+   - `navigate_page` to the page showing the bug
+   - `take_screenshot` → save to `/tmp/{issue-id}-before.png`
+   - Upload and comment on the PR:
+     ```bash
+     BEFORE_URL=$(upload-screenshot /tmp/{issue-id}-before.png {issue-id}-before)
+     gh pr comment {pr-number} --body "## Before
+     ![before]($BEFORE_URL)
+     {description of bug}"
+     ```
 
-{description of what is wrong}"
-```
+3. Implement the fix
 
-4. Implement the fix
+4. Take **after** screenshot (same page), upload and comment:
 
-5. Take after screenshot (same page), upload and comment:
+   ```bash
+   AFTER_URL=$(upload-screenshot /tmp/{issue-id}-after.png {issue-id}-after)
+   gh pr comment {pr-number} --body "## After
+   ![after]($AFTER_URL)
+   {description of what changed}"
+   ```
 
-```bash
-AFTER_URL=$(upload-screenshot /tmp/{issue-id}-after.png {issue-id}-after)
-gh pr comment {pr-number} --body "## After
-![after]($AFTER_URL)
-
-{description of what changed}"
-```
-
-6. Kill dev server: `kill %1`
+5. Kill dev server: `kill %1`
 
 Keep changes minimal. Don't refactor surrounding code.
 
@@ -92,7 +87,7 @@ Address all bot comments before marking ready.
 
 ### 4. Progress updates
 
-Send DM updates to owner (Mikael) via `slack_send_message` at key milestones:
+Send DM updates to owner (Mikael, user ID U03UHGEG5SL) via `slack_send_message` at key milestones:
 
 - Starting: what you're working on
 - Key findings
