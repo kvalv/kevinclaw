@@ -151,12 +151,29 @@
                 if (ev.type === "assistant" && ev.message) {
                     return prefix + (ev.message.content||[]).map(b => {
                         if (b.type === "text") return b.text.slice(0,150);
-                        if (b.type === "tool_use") return '<span style="color:#d2a8ff">[tool] ' + b.name + '</span>';
+                        if (b.type === "tool_use") {
+                            let hint = '';
+                            if (b.input) {
+                                const raw = typeof b.input === 'string' ? b.input : JSON.stringify(b.input);
+                                hint = ': ' + raw.slice(0, 80) + (raw.length > 80 ? '…' : '');
+                            }
+                            return '<span style="color:#d2a8ff">[tool] ' + b.name + hint + '</span>';
+                        }
                         if (b.type === "thinking") return '<span style="color:#484f58">[thinking]</span>';
                         return "[" + b.type + "]";
                     }).join(" ");
                 }
-                if (ev.type === "user" && ev.tool_use_result) return prefix + '<span style="color:#8b949e">[result]</span>';
+                if (ev.type === "user" && ev.tool_use_result) {
+                    const r = ev.tool_use_result;
+                    let text = '';
+                    if (typeof r === 'string') text = r;
+                    else if (Array.isArray(r)) text = r.map(x => x.text || '').join(' ');
+                    else text = JSON.stringify(r);
+                    const bytes = text.length;
+                    const size = bytes >= 1024 ? (bytes/1024).toFixed(1) + 'kb' : bytes + 'b';
+                    const preview = text.replace(/\s+/g, ' ').slice(0, 100);
+                    return prefix + '<span style="color:#8b949e">[result] (' + size + ') ' + preview + (text.length > 100 ? '…' : '') + '</span>';
+                }
                 if (ev.type === "result") return prefix + '<span style="color:#3fb950">[' + ev.subtype + '] ' + (ev.result||"").slice(0,100) + '</span>';
                 return prefix + json.slice(0, 100);
             } catch(e) { return prefix + json.slice(0, 100); }

@@ -82,13 +82,15 @@
             }
             if (ev.type === "user" && ev.tool_use_result) {
                 const r = ev.tool_use_result;
-                if (typeof r === "string") return "[result] " + r.slice(0, 200);
-                if (Array.isArray(r)) return "[result] " + r.map(x => (x.text||"").slice(0,150)).join(" ");
-                if (r.stdout !== undefined) {
-                    const out = (r.stdout || r.stderr || "").slice(0, 200);
-                    return "[result] " + (out || "(empty)");
-                }
-                return "[result] " + JSON.stringify(r).slice(0, 200);
+                let text = '';
+                if (typeof r === 'string') text = r;
+                else if (Array.isArray(r)) text = r.map(x => x.text || '').join(' ');
+                else if (r.stdout !== undefined) text = r.stdout || r.stderr || '';
+                else text = JSON.stringify(r);
+                const bytes = text.length;
+                const size = bytes >= 1024 ? (bytes/1024).toFixed(1) + 'kb' : bytes + 'b';
+                const preview = text.replace(/\s+/g, ' ').slice(0, 200);
+                return "[result] (" + size + ") " + (preview || "(empty)") + (text.length > 200 ? '…' : '');
             }
             if (ev.type === "result") {
                 return "[" + ev.subtype + "] " + (ev.result || "").slice(0, 300) + " (" + (ev.num_turns||0) + " turns, " + (ev.duration_ms||0) + "ms)";
