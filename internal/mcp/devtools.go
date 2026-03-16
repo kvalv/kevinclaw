@@ -142,6 +142,16 @@ func shellRunner(dir string, cmd string) error {
 	return nil
 }
 
+// expandHome expands a leading ~ to the user's home directory.
+func expandHome(p string) string {
+	if strings.HasPrefix(p, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return home + p[1:]
+		}
+	}
+	return p
+}
+
 // ErrPortBusy is returned when the app's port is already in use.
 var ErrPortBusy = errors.New("port is busy")
 
@@ -163,6 +173,8 @@ func newDevServer(apps map[string]config.AppDevConfig, runner cmdRunner) *devSer
 
 // Start runs setup commands then launches the dev command in the background.
 func (ds *devServer) Start(ctx context.Context, worktreePath string, app string) error {
+	worktreePath = expandHome(worktreePath)
+
 	cfg, ok := ds.apps[app]
 	if !ok {
 		return fmt.Errorf("unknown app %q", app)
