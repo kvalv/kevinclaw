@@ -3,6 +3,7 @@ package mcp
 import (
 	"errors"
 	"net"
+	"os"
 	"strings"
 	"testing"
 
@@ -75,6 +76,29 @@ func TestDevServerStart(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("env vars inherited by runner", func(t *testing.T) {
+		t.Setenv("FOO", "bar")
+
+		envApps := map[string]config.AppDevConfig{
+			"env-app": {Port: 0, DevCmd: "echo dev"},
+		}
+
+		var got string
+		runner := func(dir string, cmd string) error {
+			got = os.Getenv("FOO")
+			return nil
+		}
+
+		ds := newDevServer(envApps, runner)
+		if err := ds.Start(t.Context(), t.TempDir(), "env-app"); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if got != "bar" {
+			t.Fatalf("expected FOO=bar, got %q", got)
+		}
+	})
 
 	t.Run("port busy fails", func(t *testing.T) {
 		ln, err := net.Listen("tcp", "localhost:0")
