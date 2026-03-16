@@ -21,12 +21,6 @@ For each one, check the state via bugfix_get and decide:
 - 'review': check the PR for new comments
 Handle them now.`))
 
-var reviewPRTmpl = template.Must(template.New("reviewPR").Parse(
-	`Check PR {{.PRURL}} for new review comments on {{.IssueID}} ({{.Title}}).
-If there are changes requested, address them — push fixes, comment on what you changed, and update the bugfix via bugfix_update.
-If the PR has been approved and merged, update status to done with pr_merged: true.
-If no new comments, just update pr_last_checked_at via bugfix_update with id {{.ID}}.`))
-
 type bugfixRow struct {
 	ID            int64
 	IssueID       string
@@ -113,10 +107,11 @@ func resumeUnfinishedBugfixes(ctx context.Context, pool *pgxpool.Pool, a *Agent,
 	}()
 }
 
-// checkReviewPRs finds bugfixes in "review" status and prompts Kevin to check for new feedback.
+// checkReviewPRs finds bugfixes in "review" status and nudges Kevin to re-dispatch Darryl
+// so he can check for new comments and address them.
 func checkReviewPRs(ctx context.Context, pool *pgxpool.Pool, a *Agent, ownerID string) int {
 	rows, err := pool.Query(ctx,
-		`SELECT id, linear_issue_id, title, pr_url, session_id, pr_last_checked_at
+		`SELECT id, linear_issue_id, title, pr_url
 		 FROM bugfixes
 		 WHERE status = 'review' AND pr_merged = false AND pr_url IS NOT NULL
 		 ORDER BY created_at`)
@@ -128,33 +123,31 @@ func checkReviewPRs(ctx context.Context, pool *pgxpool.Pool, a *Agent, ownerID s
 
 	count := 0
 	for rows.Next() {
-		var b bugfixRow
-		if err := rows.Scan(&b.ID, &b.IssueID, &b.Title, &b.PRURL, &b.SessionID, &b.PRLastChecked); err != nil {
+		var id int64
+		var issueID, title, prURL string
+		if err := rows.Scan(&id, &issueID, &title, &prURL); err != nil {
 			slog.Error("orchestrator: scan failed", "err", err)
 			continue
 		}
 
-		// Use the bugfix session key so Kevin resumes the same conversation
-		key := SessionKey(fmt.Sprintf("bugfix:%s", b.IssueID))
+		key := SessionKey(fmt.Sprintf("bugfix:%s", issueID))
+		prompt := fmt.Sprintf(
+			"There may be new comments on PR %s for %s (%s). "+
+				"Re-dispatch Darryl via bugfix_start with id %d to check and address any comments. "+
+				"If the PR has been approved and merged, update status to done with pr_merged: true.",
+			prURL, issueID, title, id)
 
-		var buf bytes.Buffer
-		reviewPRTmpl.Execute(&buf, struct {
-			PRURL, IssueID, Title string
-			ID                    int64
-		}{*b.PRURL, b.IssueID, b.Title, b.ID})
-		prompt := buf.String()
-
-		slog.Info("orchestrator: checking PR", "issue", b.IssueID, "pr", *b.PRURL)
+		slog.Info("orchestrator: nudging PR review", "issue", issueID, "pr", prURL)
 		count++
 
 		go func(issueID string, key SessionKey, prompt string) {
 			reply, err := a.HandleMessage(ctx, key, prompt, ownerID, "")
 			if err != nil {
-				slog.Error("orchestrator: PR check failed", "issue", issueID, "err", err)
+				slog.Error("orchestrator: PR review nudge failed", "issue", issueID, "err", err)
 				return
 			}
-			slog.Info("orchestrator: PR check done", "issue", issueID, "reply_len", len(reply))
-		}(b.IssueID, key, prompt)
+			slog.Info("orchestrator: PR review nudge done", "issue", issueID, "reply_len", len(reply))
+		}(issueID, key, prompt)
 	}
 	return count
 }
