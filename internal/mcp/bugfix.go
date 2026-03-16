@@ -12,6 +12,12 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+var triageTmpl = template.Must(template.New("triage").Parse(`TRIAGE MODE
+
+Review recent Linear issues from the last {{.Period}} and produce a shortlist of candidates worth fixing.
+
+Use the Linear MCP tools to list issues. Filter by your standard criteria (clarity, localizability, testability, hard gates). Write the results to memory/daily/{{.Today}}.md under a ## Triage heading, then DM the owner with the candidate shortlist.`))
+
 var assessTmpl = template.Must(template.New("assess").Parse(`Assess Linear issue {{.IssueID}}: {{.Title}}
 URL: {{.IssueURL}}
 Bugfix ID: {{.ID}}
@@ -360,6 +366,44 @@ func BugfixServer(pool *pgxpool.Pool, spawn AgentSpawner) *sdkmcp.Server {
 		}
 
 		return textResult("Darryl is on it (bugfix #%d)", args.ID), nil
+	})
+
+	// triage_start — spawns Angela in triage mode to filter recent issues
+	s.AddTool(&sdkmcp.Tool{
+		Name:        "triage_start",
+		Description: "Spawn Angela to triage recent Linear issues. She filters candidates and DMs the owner with a shortlist.",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"period": {"type": "string", "description": "Time period to look back, e.g. 1month, 2weeks, 3days. Default: 1month"}
+			}
+		}`),
+	}, func(ctx context.Context, req *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
+		var args struct {
+			Period string `json:"period"`
+		}
+		if err := json.Unmarshal(req.Params.Arguments, &args); err != nil {
+			return errResult("invalid arguments: %v", err), nil
+		}
+		if args.Period == "" {
+			args.Period = "1month"
+		}
+
+		today := time.Now().Format(time.DateOnly)
+
+		var buf bytes.Buffer
+		triageTmpl.Execute(&buf, struct {
+			Period string
+			Today  string
+		}{args.Period, today})
+		prompt := buf.String()
+
+		// Use a synthetic run ID (0) since triage isn't tied to a specific bugfix
+		if err := spawn(ctx, "angela", prompt, 0, "triage-"+today, ""); err != nil {
+			return errResult("spawn failed: %v", err), nil
+		}
+
+		return textResult("Angela is triaging issues from the last %s", args.Period), nil
 	})
 
 	return s
