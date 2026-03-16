@@ -31,46 +31,30 @@ Call `bugfix_update` with `pr_url`.
 1. Write the smallest failing test. Commit: "Add failing test for {issue-id}"
 2. Implement the fix. Commit: "Fix: {issue title}\n\nCloses {issue-id}"
 
-**If Frontend (apps/):** Screenshots are how you reproduce and prove the fix. No unit tests for frontend.
+**Frontend (apps/):** Screenshots are how you reproduce and prove the fix. No unit tests for frontend.
 
-1. Start the dev server:
+1. Start the dev server via `dev_server_start` MCP tool:
 
-   ```bash
-   cd {worktree_path}
-   npm install
-   REACT_APP_DEFAULT_USER="$REACT_APP_DEFAULT_USER" \
-   REACT_APP_DEFAULT_PASSWORD="$REACT_APP_DEFAULT_PASSWORD" \
-   npm run dev:proxy &
-   ```
+   - Pass `worktree_path` and `app` name (e.g. `company-settings`, `contracts`, `suppliers`)
+   - It handles npm install, env vars, and waits for ready
+   - If generating graphql types, run `npm run generate` after edits
 
-   Wait for `http://localhost:3000` to respond.
+2. Take a **before** screenshot using the `browser` MCP:
 
-   If generating graphl types, run `npm run generate` after you have edited files.
-
-2. Use the `browser` MCP to navigate to the affected page and take a **before** screenshot:
-
-   - `navigate_page` to the page showing the bug
-   - `take_screenshot` → save to `/tmp/{issue-id}-before.png`
-   - Upload and comment on the PR:
-     ```bash
-     BEFORE_URL=$(upload-screenshot /tmp/{issue-id}-before.png {issue-id}-before)
-     gh pr comment {pr-number} --body "## Before
-     ![before]($BEFORE_URL)
-     {description of bug}"
-     ```
+   - `navigate_page` to the page showing the bug (e.g. `http://localhost:3000/company-settings/users/`)
+   - `take_screenshot` to capture the bug state
+   - Upload via `upload_screenshot` MCP tool — returns a URL
+   - Comment on the PR with the image URL
 
 3. Implement the fix
 
-4. Take **after** screenshot (same page), upload and comment:
+4. Take an **after** screenshot (same page):
 
-   ```bash
-   AFTER_URL=$(upload-screenshot /tmp/{issue-id}-after.png {issue-id}-after)
-   gh pr comment {pr-number} --body "## After
-   ![after]($AFTER_URL)
-   {description of what changed}"
-   ```
+   - `take_screenshot` again
+   - Upload via `upload_screenshot`
+   - Comment on the PR
 
-5. Kill dev server: `kill %1`
+5. Stop dev server: call `dev_server_stop`
 
 Keep changes minimal. Don't refactor surrounding code.
 
@@ -79,15 +63,23 @@ Keep changes minimal. Don't refactor surrounding code.
 **Backend:** run scoped tests + `go vet ./...`
 **Frontend:** just push. Translations and prettier are for later.
 
-Wait for CI: `gh pr checks {pr-number} --watch`
-If CI fails, fix and push again.
+Wait for CI to fully complete — ALL checks must be pass or skipping, NONE pending:
+
+```bash
+gh pr checks {pr-number} --watch --fail-level all
+```
+
+This blocks until every check finishes. Only proceed when it exits with code 0.
+If it exits non-zero, some checks failed — look at which ones, fix the issues, push, and wait again.
+
+Do NOT mark the PR as ready or DM the owner until CI is fully green.
 
 Check for bot review comments: `gh pr view {pr-number} --comments`
 Address all bot comments before marking ready.
 
 ### 4. Progress updates
 
-Send DM updates to owner (Mikael, user ID U03UHGEG5SL) via `slack_send_message` at key milestones:
+Send DM updates to owner (Mikael, DM channel D0AMF9GESNL) via `slack_send_message` at key milestones:
 
 - Starting: what you're working on
 - Key findings

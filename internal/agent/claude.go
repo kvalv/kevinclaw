@@ -166,8 +166,8 @@ func ClaudeRunner(cfg Config) Runner {
 			}
 			lines = append(lines, line)
 
-			// Emit event for live streaming
-			if cfg.OnEvent != nil {
+			// Emit event for live streaming (skip noisy events)
+			if cfg.OnEvent != nil && !strings.Contains(line, `"rate_limit_event"`) {
 				cfg.OnEvent(StreamEvent{
 					SessionKey: opts.SessionKey,
 					RunID:      opts.RunID,

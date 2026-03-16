@@ -13,7 +13,7 @@ Workflow for working on frontend apps in `apps/`.
 Start the dev server in the worktree:
 
 ```bash
-cd {worktree_path}
+cd {worktree_path}/apps/{relevant-app}
 npm install
 REACT_APP_DEFAULT_USER="$REACT_APP_DEFAULT_USER" \
 REACT_APP_DEFAULT_PASSWORD="$REACT_APP_DEFAULT_PASSWORD" \
