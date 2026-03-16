@@ -3,24 +3,26 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
-	"time"
 
+	"github.com/kvalv/kevinclaw/internal/config"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // DevToolsServer creates an MCP server with dev server management and screenshot upload tools.
-func DevToolsServer(repo string) *sdkmcp.Server {
+func DevToolsServer(repo string, apps map[string]config.AppDevConfig) *sdkmcp.Server {
 	s := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "kevinclaw-devtools", Version: "v0.0.1"}, nil)
 
-	var mu sync.Mutex
-	var devServerCmd *exec.Cmd
+	ds := newDevServer(apps, shellRunner)
 
 	// upload_screenshot — uploads a file to the GitHub screenshots release, returns URL
 	s.AddTool(&sdkmcp.Tool{
@@ -80,15 +82,15 @@ func DevToolsServer(repo string) *sdkmcp.Server {
 		return textResult("%s", url), nil
 	})
 
-	// dev_server_start — starts npm run dev:proxy in an app directory
+	// dev_server_start — runs setup + dev server for an app
 	s.AddTool(&sdkmcp.Tool{
 		Name:        "dev_server_start",
-		Description: "Start the frontend dev server for an app. Runs npm install + npm run dev:proxy in the app directory.",
+		Description: "Start the frontend dev server for an app. Runs setup commands then the dev command from config.",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
 				"worktree_path": {"type": "string", "description": "Path to the git worktree root"},
-				"app":           {"type": "string", "description": "App name under apps/ (e.g. company-settings, contracts, suppliers)"}
+				"app":           {"type": "string", "description": "App name (e.g. company-settings, contracts, suppliers)"}
 			},
 			"required": ["worktree_path", "app"]
 		}`),
@@ -101,56 +103,16 @@ func DevToolsServer(repo string) *sdkmcp.Server {
 			return errResult("invalid arguments: %v", err), nil
 		}
 
-		appDir := filepath.Join(args.WorktreePath, "apps", args.App)
-		if _, err := os.Stat(appDir); err != nil {
-			return errResult("app directory not found: %s", appDir), nil
+		if err := ds.Start(ctx, args.WorktreePath, args.App); err != nil {
+			return errResult("dev server start failed: %v", err), nil
 		}
 
-		mu.Lock()
-		defer mu.Unlock()
-
-		// Kill existing server if running
-		if devServerCmd != nil && devServerCmd.Process != nil {
-			devServerCmd.Process.Kill()
-			devServerCmd = nil
+		cfg := ds.apps[args.App]
+		path := cfg.Path
+		if path == "" {
+			path = "/"
 		}
-
-		// npm install
-		installCmd := exec.CommandContext(ctx, "npm", "install")
-		installCmd.Dir = appDir
-		if out, err := installCmd.CombinedOutput(); err != nil {
-			return errResult("npm install failed: %s", string(out)), nil
-		}
-
-		// Start dev:proxy in background
-		cmd := exec.Command("npm", "run", "dev:proxy")
-		cmd.Dir = appDir
-		cmd.Env = append(os.Environ(),
-			"REACT_APP_DEFAULT_USER="+os.Getenv("REACT_APP_DEFAULT_USER"),
-			"REACT_APP_DEFAULT_PASSWORD="+os.Getenv("REACT_APP_DEFAULT_PASSWORD"),
-		)
-		if err := cmd.Start(); err != nil {
-			return errResult("failed to start dev server: %v", err), nil
-		}
-		devServerCmd = cmd
-		slog.Info("devtools: dev server started", "app", args.App, "pid", cmd.Process.Pid, "dir", appDir)
-
-		// Wait for server to be ready
-		ready := false
-		for i := 0; i < 30; i++ {
-			time.Sleep(2 * time.Second)
-			checkCmd := exec.CommandContext(ctx, "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "http://localhost:3000")
-			if out, err := checkCmd.Output(); err == nil && strings.TrimSpace(string(out)) == "200" {
-				ready = true
-				break
-			}
-		}
-
-		if !ready {
-			return textResult("Dev server started (PID %d) but localhost:3000 not responding yet. It may still be starting up.", cmd.Process.Pid), nil
-		}
-
-		return textResult("Dev server ready at http://localhost:3000 (PID %d)", cmd.Process.Pid), nil
+		return textResult("Dev server started for %s at http://localhost:%d%s", args.App, cfg.Port, path), nil
 	})
 
 	// dev_server_stop — stops the running dev server
@@ -159,20 +121,81 @@ func DevToolsServer(repo string) *sdkmcp.Server {
 		Description: "Stop the running frontend dev server.",
 		InputSchema: json.RawMessage(`{"type": "object", "properties": {}}`),
 	}, func(ctx context.Context, req *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
-		mu.Lock()
-		defer mu.Unlock()
+		ds.mu.Lock()
+		defer ds.mu.Unlock()
 
-		if devServerCmd == nil || devServerCmd.Process == nil {
+		if ds.cmd == nil || ds.cmd.Process == nil {
 			return textResult("No dev server running."), nil
 		}
 
-		pid := devServerCmd.Process.Pid
-		devServerCmd.Process.Kill()
-		devServerCmd = nil
+		pid := ds.cmd.Process.Pid
+		ds.cmd.Process.Kill()
+		ds.cmd = nil
 		slog.Info("devtools: dev server stopped", "pid", pid)
 
 		return textResult("Dev server stopped (PID %d).", pid), nil
 	})
 
 	return s
+}
+
+// shellRunner executes a shell command in the given directory.
+func shellRunner(dir string, cmd string) error {
+	parts := strings.Fields(cmd)
+	c := exec.Command(parts[0], parts[1:]...)
+	c.Dir = dir
+	out, err := c.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s: %s", cmd, string(out))
+	}
+	return nil
+}
+
+// ErrPortBusy is returned when the app's port is already in use.
+var ErrPortBusy = errors.New("port is busy")
+
+// cmdRunner runs a shell command in the given directory. Blocks until done.
+type cmdRunner func(dir string, cmd string) error
+
+// devServer manages frontend dev server lifecycle.
+type devServer struct {
+	apps   map[string]config.AppDevConfig
+	runner cmdRunner
+	mu     sync.Mutex
+	cmd    *exec.Cmd
+}
+
+// newDevServer creates a devServer with the given app configs and command runner.
+func newDevServer(apps map[string]config.AppDevConfig, runner cmdRunner) *devServer {
+	return &devServer{apps: apps, runner: runner}
+}
+
+// Start runs setup commands then the dev command for the given app.
+func (ds *devServer) Start(ctx context.Context, worktreePath string, app string) error {
+	cfg, ok := ds.apps[app]
+	if !ok {
+		return fmt.Errorf("unknown app %q", app)
+	}
+
+	// Check if the port is available
+	ln, err := net.Listen("tcp", "localhost:"+strconv.Itoa(cfg.Port))
+	if err != nil {
+		slog.Error("devtools: port busy", "app", app, "port", cfg.Port, "err", err)
+		return fmt.Errorf("port %d: %w", cfg.Port, ErrPortBusy)
+	}
+	ln.Close()
+
+	appDir := filepath.Join(worktreePath, "apps", app)
+
+	for _, cmd := range cfg.SetupCmds {
+		if err := ds.runner(appDir, cmd); err != nil {
+			return fmt.Errorf("setup command %q failed: %w", cmd, err)
+		}
+	}
+
+	if err := ds.runner(appDir, cfg.DevCmd); err != nil {
+		return fmt.Errorf("dev command %q failed: %w", cfg.DevCmd, err)
+	}
+
+	return nil
 }

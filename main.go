@@ -108,7 +108,7 @@ func run(ctx context.Context) error {
 		"linear": mcpServers["linear"],
 	}
 	// Darryl's devtools MCP (screenshot upload + dev server management)
-	darrylDevtoolsAddr, darrylDevtoolsShutdown, err := mcp.ServeHTTP(ctx, mcp.DevToolsServer("ignite-analytics/main"), "localhost:0")
+	darrylDevtoolsAddr, darrylDevtoolsShutdown, err := mcp.ServeHTTP(ctx, mcp.DevToolsServer("ignite-analytics/main", cfg.Apps), "localhost:0")
 	if err != nil {
 		return fmt.Errorf("darryl devtools: %w", err)
 	}
