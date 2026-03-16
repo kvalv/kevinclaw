@@ -10,9 +10,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/kvalv/kevinclaw/internal/config"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -121,19 +121,10 @@ func DevToolsServer(repo string, apps map[string]config.AppDevConfig) *sdkmcp.Se
 		Description: "Stop the running frontend dev server.",
 		InputSchema: json.RawMessage(`{"type": "object", "properties": {}}`),
 	}, func(ctx context.Context, req *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
-		ds.mu.Lock()
-		defer ds.mu.Unlock()
-
-		if ds.cmd == nil || ds.cmd.Process == nil {
-			return textResult("No dev server running."), nil
+		if err := ds.Stop(); err != nil {
+			return errResult("stop failed: %v", err), nil
 		}
-
-		pid := ds.cmd.Process.Pid
-		ds.cmd.Process.Kill()
-		ds.cmd = nil
-		slog.Info("devtools: dev server stopped", "pid", pid)
-
-		return textResult("Dev server stopped (PID %d).", pid), nil
+		return textResult("Dev server stopped."), nil
 	})
 
 	return s
@@ -170,32 +161,74 @@ func newDevServer(apps map[string]config.AppDevConfig, runner cmdRunner) *devSer
 	return &devServer{apps: apps, runner: runner}
 }
 
-// Start runs setup commands then the dev command for the given app.
+// Start runs setup commands then launches the dev command in the background.
 func (ds *devServer) Start(ctx context.Context, worktreePath string, app string) error {
 	cfg, ok := ds.apps[app]
 	if !ok {
 		return fmt.Errorf("unknown app %q", app)
 	}
 
-	// Check if the port is available
-	ln, err := net.Listen("tcp", "localhost:"+strconv.Itoa(cfg.Port))
-	if err != nil {
-		slog.Error("devtools: port busy", "app", app, "port", cfg.Port, "err", err)
-		return fmt.Errorf("port %d: %w", cfg.Port, ErrPortBusy)
+	// Check if the port is available (skip for port 0, used in tests)
+	if cfg.Port != 0 {
+		ln, err := net.Listen("tcp", fmt.Sprintf("localhost:%d", cfg.Port))
+		if err != nil {
+			slog.Error("devtools: port busy", "app", app, "port", cfg.Port, "err", err)
+			return fmt.Errorf("port %d: %w", cfg.Port, ErrPortBusy)
+		}
+		ln.Close()
 	}
-	ln.Close()
 
 	appDir := filepath.Join(worktreePath, "apps", app)
 
+	// Run setup commands synchronously
 	for _, cmd := range cfg.SetupCmds {
 		if err := ds.runner(appDir, cmd); err != nil {
 			return fmt.Errorf("setup command %q failed: %w", cmd, err)
 		}
 	}
 
-	if err := ds.runner(appDir, cfg.DevCmd); err != nil {
+	// Launch dev command in background
+	ds.mu.Lock()
+	defer ds.mu.Unlock()
+
+	parts := strings.Fields(cfg.DevCmd)
+	cmd := exec.Command(parts[0], parts[1:]...)
+	cmd.Dir = appDir
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("dev command %q failed: %w", cfg.DevCmd, err)
 	}
+	ds.cmd = cmd
+	slog.Info("devtools: dev server started", "app", app, "pid", cmd.Process.Pid, "dir", appDir)
 
+	// Kill on context cancel
+	go func() {
+		<-ctx.Done()
+		ds.Stop()
+	}()
+
+	return nil
+}
+
+// Stop kills the running dev server process.
+func (ds *devServer) Stop() error {
+	ds.mu.Lock()
+	defer ds.mu.Unlock()
+
+	if ds.cmd == nil || ds.cmd.Process == nil {
+		return nil
+	}
+
+	pid := ds.cmd.Process.Pid
+	pgid, err := syscall.Getpgid(pid)
+	if err == nil {
+		syscall.Kill(-pgid, syscall.SIGTERM)
+	} else {
+		ds.cmd.Process.Kill()
+	}
+	ds.cmd.Wait()
+	ds.cmd = nil
+
+	slog.Info("devtools: dev server stopped", "pid", pid)
 	return nil
 }
