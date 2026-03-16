@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
 	"text/template"
 	"time"
 )
+
+// ErrBusy is returned when all concurrency slots are occupied.
+var ErrBusy = errors.New("agent is busy")
 
 // SessionKey identifies a conversation context. Opaque string — caller decides the format.
 type SessionKey string
@@ -39,6 +43,7 @@ type Config struct {
 	MCPServers     map[string]MCPServer
 	PermissionMode string // e.g. "bypassPermissions"
 	OnEvent        func(StreamEvent)
+	MaxConcurrent  int // max concurrent HandleMessage calls (default 3)
 }
 
 // RunOpts are per-invocation options passed to the Runner.
@@ -82,13 +87,19 @@ type Agent struct {
 	runner   Runner
 	sessions SessionStore
 	policy   ToolPolicy
+	sem      chan struct{} // concurrency semaphore
 }
 
 func New(cfg Config) *Agent {
+	maxc := cfg.MaxConcurrent
+	if maxc <= 0 {
+		maxc = 3
+	}
 	return &Agent{
 		cfg:      cfg,
 		runner:   ClaudeRunner(cfg),
 		sessions: &memoryStore{sessions: make(map[string]string)},
+		sem:      make(chan struct{}, maxc),
 	}
 }
 
@@ -137,7 +148,16 @@ func WithRunID(id int64) MessageOption {
 
 // HandleMessage sends a prompt to claude and returns the text response.
 // userID and channel are used by the policy to determine tool restrictions.
+// Returns ErrBusy if all concurrency slots are occupied.
 func (a *Agent) HandleMessage(ctx context.Context, key SessionKey, text, userID, channel string, opts ...MessageOption) (string, error) {
+	select {
+	case a.sem <- struct{}{}:
+		defer func() { <-a.sem }()
+	default:
+		slog.Warn("agent: busy, dropping message", "session_key", key)
+		return "", ErrBusy
+	}
+
 	var mo messageOpts
 	for _, o := range opts {
 		o(&mo)

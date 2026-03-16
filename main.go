@@ -20,7 +20,6 @@ import (
 	"github.com/kvalv/kevinclaw/internal/mcp"
 	"github.com/kvalv/kevinclaw/internal/postgres"
 	"github.com/kvalv/kevinclaw/internal/slack"
-	"github.com/kvalv/kevinclaw/internal/util"
 	"github.com/kvalv/kevinclaw/migrations"
 	"github.com/kvalv/kevinclaw/web"
 )
@@ -108,12 +107,20 @@ func run(ctx context.Context) error {
 		"slack":  mcpServers["slack"],
 		"linear": mcpServers["linear"],
 	}
+	// Darryl's devtools MCP (screenshot upload + dev server management)
+	darrylDevtoolsAddr, darrylDevtoolsShutdown, err := mcp.ServeHTTP(ctx, mcp.DevToolsServer("ignite-analytics/main"), "localhost:0")
+	if err != nil {
+		return fmt.Errorf("darryl devtools: %w", err)
+	}
+	defer darrylDevtoolsShutdown()
+
 	darrylMCPs := map[string]agent.MCPServer{
-		"bugfix": mcpServers["bugfix"],
-		"slack":  mcpServers["slack"],
+		"bugfix":   mcpServers["bugfix"],
+		"slack":    mcpServers["slack"],
+		"devtools": {URL: darrylDevtoolsAddr},
 		"browser": {
 			Command: "npx",
-			Args:    []string{"chrome-devtools-mcp", "--executablePath", "brave", "--headless"},
+			Args:    []string{"chrome-devtools-mcp", "--executablePath", "/usr/bin/brave", "--headless", "--isolated"},
 		},
 	}
 
@@ -209,8 +216,7 @@ func run(ctx context.Context) error {
 	agent.StartDailyLogRotation(ctx, memoryDir)
 	agent.StartOrchestrator(ctx, pool, a, env.OWNER_USER_ID, 5*time.Minute, 15*time.Minute)
 
-	sc := slack.New(env.SLACK_BOT_TOKEN, env.SLACK_APP_TOKEN)
-	rl := util.NewPerHour(10)
+	sc := slack.New(env.SLACK_BOT_TOKEN, env.SLACK_APP_TOKEN, cfg.ActiveChannels)
 
 	logStartupInfo(a)
 	return sc.Listen(ctx, func(ev slack.Event) {
@@ -221,21 +227,9 @@ func run(ctx context.Context) error {
 				slog.Error("db: save message failed", "err", err)
 			}
 
-			// Decide whether to process this message
-			shouldProcess := ev.IsMention
-			if !shouldProcess {
-				chName := sc.GetChannelName(ev.Channel)
-				if ch, ok := cfg.Channels[chName]; ok && ch.Mode == "active" {
-					shouldProcess = rl.Allow(ev.Channel)
-					if !shouldProcess {
-						slog.Info("ratelimit: skipping message", "channel", chName)
-					}
-				}
-			}
-			if !shouldProcess {
+			if !slack.ShouldHandle(ev, sc.ActiveChannelIDs()) {
 				return
 			}
-
 			if ev.IsMention {
 				if err := sc.AddReaction(ctx, ev.Channel, ev.MessageTS, "eyes"); err != nil {
 					slog.Warn("eyes reaction failed", "err", err)

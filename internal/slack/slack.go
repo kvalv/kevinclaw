@@ -29,28 +29,28 @@ type SlackAPI interface {
 
 // Client wraps the Slack API for sending and receiving messages.
 type Client struct {
-	api          SlackAPI
-	raw          *slack.Client // needed for Socket Mode; nil when using a fake
-	appToken     string
-	userNames    map[string]string // cache: user ID → display name
-	channelNames map[string]string // cache: channel ID → channel name
+	api              SlackAPI
+	raw              *slack.Client // needed for Socket Mode; nil when using a fake
+	appToken         string
+	userNames        map[string]string // cache: user ID → display name
+	activeChannelIDs []string          // channel IDs Kevin actively listens to
 }
 
-// New creates a new Slack client.
-func New(botToken, appToken string) *Client {
+// New creates a new Slack client. activeChannelIDs are the channel IDs Kevin actively listens to.
+func New(botToken, appToken string, activeChannelIDs []string) *Client {
 	c := slack.New(botToken, slack.OptionAppLevelToken(appToken))
 	return &Client{
-		api:          c,
-		raw:          c,
-		appToken:     appToken,
-		userNames:    make(map[string]string),
-		channelNames: make(map[string]string),
+		api:              c,
+		raw:              c,
+		appToken:         appToken,
+		userNames:        make(map[string]string),
+		activeChannelIDs: activeChannelIDs,
 	}
 }
 
 // NewWithAPI creates a Client backed by the given API implementation (for testing).
 func NewWithAPI(api SlackAPI) *Client {
-	return &Client{api: api}
+	return &Client{api: api, userNames: make(map[string]string)}
 }
 
 // Listen connects via Socket Mode and calls handler for each incoming message.
@@ -182,22 +182,30 @@ func (c *Client) GetUserName(userID string) string {
 	return name
 }
 
-// GetChannelName returns the channel name for a Slack channel ID, with caching.
-// Returns empty string on error (best-effort).
-func (c *Client) GetChannelName(channelID string) string {
-	if name, ok := c.channelNames[channelID]; ok {
-		return name
+// IsDM returns true if the channel ID is a direct message channel.
+func IsDM(channelID string) bool {
+	return len(channelID) > 0 && channelID[0] == 'D'
+}
+
+// ShouldHandle decides whether an incoming event should be handled by the agent.
+func ShouldHandle(ev Event, activeChannelIDs []string) bool {
+	if ev.IsMention {
+		return true
 	}
-	if c.raw == nil {
-		return ""
+	if IsDM(ev.Channel) {
+		return true
 	}
-	info, err := c.raw.GetConversationInfo(&slack.GetConversationInfoInput{ChannelID: channelID})
-	if err != nil {
-		slog.Warn("slack: failed to get channel info", "channel_id", channelID, "err", err)
-		return ""
+	for _, id := range activeChannelIDs {
+		if id == ev.Channel {
+			return true
+		}
 	}
-	c.channelNames[channelID] = info.Name
-	return info.Name
+	return false
+}
+
+// ActiveChannelIDs returns the resolved channel IDs this client listens to.
+func (c *Client) ActiveChannelIDs() []string {
+	return c.activeChannelIDs
 }
 
 // RemoveReaction removes an emoji reaction from a message.

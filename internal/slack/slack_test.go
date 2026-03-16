@@ -24,7 +24,7 @@ func setupClient(t *testing.T) (*slack.Client, config.Env) {
 	if err != nil {
 		t.Fatalf("loading environment: %v", err)
 	}
-	return slack.New(env.SLACK_BOT_TOKEN, env.SLACK_APP_TOKEN), env
+	return slack.New(env.SLACK_BOT_TOKEN, env.SLACK_APP_TOKEN, nil), env
 }
 
 func TestSendDM(t *testing.T) {
